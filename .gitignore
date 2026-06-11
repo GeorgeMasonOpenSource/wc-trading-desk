@@ -1,0 +1,27 @@
+# Vercel runtime / auth (NOT project.json — that's safe and needed)
+.vercel/auth.json
+.vercel/cache/
+.vercel/output/
+.vercel/.env*
+
+# Secrets — NEVER commit
+.env
+.env.*
+*.token
+*.pem
+**/secrets.json
+vercel.token
+
+# Node / build artifacts
+node_modules/
+dist/
+build/
+.next/
+.cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
