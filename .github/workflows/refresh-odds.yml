@@ -1,0 +1,48 @@
+name: Refresh bookmaker odds
+
+# Regenerates the BOOKIE_XG / BOOKIE_MARKETS snapshot in index.html from ESPN/DraftKings
+# and pushes to main, which auto-deploys via Vercel. Runs on GitHub's runners — no local
+# machine involved. If ESPN is unreachable or the data looks wrong, the script exits
+# non-zero and nothing is committed (the site keeps serving the last good snapshot).
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours during the tournament
+  workflow_dispatch:         # manual trigger from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Refresh odds snapshot
+        run: node scripts/refresh-odds.mjs --apply
+
+      - name: Verify the patched page still parses
+        run: |
+          python3 - <<'EOF'
+          import re
+          html = open('index.html').read()
+          s = re.findall(r'<script[^>]*>(.*?)</script>', html, re.S)[0]
+          open('/tmp/page.js','w').write(s)
+          EOF
+          node --check /tmp/page.js
+
+      - name: Commit and push if odds changed
+        run: |
+          if git diff --quiet index.html; then
+            echo "No odds changes — nothing to deploy."
+            exit 0
+          fi
+          git config user.name "odds-refresh-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "chore: refresh bookmaker odds snapshot ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+          git push
