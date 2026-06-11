@@ -75,30 +75,34 @@ async function probe(){
   const e = sb.events?.[2] || sb.events?.[0];
   if(!e) throw new Error('no events');
   console.log(`[probe] event ${e.id}: ${e.name}`);
-  const inline = e.competitions?.[0]?.odds;
-  console.log('[probe] scoreboard inline odds:', JSON.stringify(inline)?.slice(0, 2500));
-  const idx = await getJSON(EVENT_ODDS(e.id));
-  console.log(`[probe] core odds index: count=${idx.count}, items=${(idx.items||[]).length}`);
-  const items = await deref(idx.items);
-  for(const it of items){
-    console.log(`[probe] --- provider: ${it.provider?.name} (id ${it.provider?.id}) keys: ${Object.keys(it).join(',')}`);
-    console.log('[probe]', JSON.stringify(it).slice(0, 2500));
-    const pid = it.provider?.id;
-    const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
-    if(pid != null){
-      for(const url of [`${base}/odds/${pid}/propBets?limit=10`, `${base}/odds/${pid}/props?limit=10`]){
-        try {
-          const pj = await getJSON(url);
-          console.log(`[probe] ${url} -> count=${pj.count}, sample:`, JSON.stringify(await deref((pj.items||[]).slice(0,2))).slice(0, 2500));
-        } catch(err){ console.log(`[probe] ${url} -> ${err.message}`); }
+  const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
+  const items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items);
+  const it = items[0];
+  console.log(`[probe] provider ${it?.provider?.name} (${it?.provider?.id}); homeTeam $ref: ${it?.homeTeamOdds?.team?.$ref}; awayTeam $ref: ${it?.awayTeamOdds?.team?.$ref}`);
+  const pid = it?.provider?.id ?? 100;
+  const all = [];
+  for(let page=1; page<=5; page++){
+    const pj = await getJSON(`${base}/odds/${pid}/propBets?limit=200&page=${page}`);
+    all.push(...(pj.items||[]));
+    if(all.length >= (pj.count||0)) break;
+  }
+  console.log(`[probe] fetched ${all.length} props`);
+  const byType = {};
+  for(const p of all){
+    const n = p.type?.name || '?';
+    byType[n] = (byType[n]||0)+1;
+  }
+  console.log('[probe] prop type histogram:', JSON.stringify(byType));
+  const want = [/clean sheet/i, /both teams/i, /total goals/i, /to score 2\+|over 1\.5/i];
+  const seen = new Set();
+  for(const p of all){
+    const n = p.type?.name || '';
+    for(const re of want){
+      if(re.test(n) && !seen.has(n)){
+        seen.add(n);
+        console.log(`[probe] FULL SAMPLE of "${n}":`, JSON.stringify(p).slice(0, 2000));
       }
     }
-  }
-  // some leagues expose these at the competition level rather than under odds
-  const cbase = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
-  for(const url of [`${cbase}/probabilities?limit=5`, `${cbase}/predictor`]){
-    try { const pj = await getJSON(url); console.log(`[probe] ${url} ->`, JSON.stringify(pj).slice(0, 800)); }
-    catch(err){ console.log(`[probe] ${url} -> ${err.message}`); }
   }
 }
 
