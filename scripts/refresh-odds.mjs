@@ -34,15 +34,37 @@ function mlValue(side){
   return Number.isFinite(n) ? n : null;
 }
 
-// Solve lambda such that P(Poisson(lambda) >= 2) = pOver15  →  1 - e^-l (1 + l) = p
-function poissonFromOver15(pOver15){
-  let lo = 0.01, hi = 6;
-  for(let i=0;i<60;i++){
-    const mid = (lo+hi)/2;
-    const p = 1 - Math.exp(-mid)*(1+mid);
-    if(p < pOver15) lo = mid; else hi = mid;
+// ---- Poisson match model: solve (lamHome, lamAway) from devigged 3-way moneyline +
+// devigged match-total over/under 2.5 (both fully two-sided markets on the DK odds item).
+const poissonPmf = (k, lam) => Math.exp(-lam) * Math.pow(lam, k) / [1,1,2,6,24,120,720,5040,40320,362880,3628800,39916800,479001600][k];
+function matchProbs(lamH, lamA){
+  let pH = 0, pD = 0;
+  for(let h=0; h<=12; h++) for(let a=0; a<=12; a++){
+    const p = poissonPmf(h, lamH) * poissonPmf(a, lamA);
+    if(h > a) pH += p; else if(h === a) pD += p;
   }
-  return (lo+hi)/2;
+  return {pH, pD};
+}
+function solveLambdas(pHome, pAway, pOver25){
+  // total T from P(NH+NA >= 3) = pOver25, NH+NA ~ Poisson(T)
+  let lo = 0.2, hi = 7;
+  for(let i=0;i<60;i++){
+    const T = (lo+hi)/2;
+    const p = 1 - Math.exp(-T)*(1 + T + T*T/2);
+    if(p < pOver25) lo = T; else hi = T;
+  }
+  const T = (lo+hi)/2;
+  // split T so the model's home-win share matches the devigged moneyline
+  const targetRatio = pHome / (pHome + pAway);
+  let sLo = 0.05, sHi = 0.95;
+  for(let i=0;i<50;i++){
+    const s = (sLo+sHi)/2;
+    const {pH, pD} = matchProbs(T*s, T*(1-s));
+    const ratio = pH / Math.max(1e-9, 1 - pD);
+    if(ratio < targetRatio) sLo = s; else sHi = s;
+  }
+  const s = (sLo+sHi)/2;
+  return {lamH: T*s, lamA: T*(1-s)};
 }
 
 async function getJSON(url){
@@ -126,14 +148,13 @@ async function main(){
     const mdH = teamGameNo[h], mdA = teamGameNo[a];
     if(mdH > 3 || mdA > 3) continue;   // group stage only
 
-    // --- odds item: core endpoint first (carries team $refs + propBets), scoreboard fallback ---
+    // --- odds item: core endpoint (carries team $refs, two-sided totals, propBets) ---
     let pHome, pDraw, pAway, oddsItem = null;
     try {
       const items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items);
       oddsItem = items.find(it => String(it?.provider?.id) === '100') || items[0];   // DraftKings = 100
     } catch(err){ console.warn(`[odds] ${h}v${a}: ${err.message}`); }
-    const inline = (comp.odds || [])[0];
-    const mlSrc = oddsItem || inline;
+    const mlSrc = oddsItem || (comp.odds || [])[0];
     if(mlSrc){
       const mlH = mlValue(mlSrc.homeTeamOdds);
       const mlD = mlValue(mlSrc.drawOdds ?? mlSrc.drawTeamOdds);
@@ -143,12 +164,19 @@ async function main(){
       }
     }
 
-    // --- props (DraftKings via core API; structures confirmed by --probe 2026-06-11) ---
-    // "Team Total Goals" (target 1.5)  -> Poisson-solved team xG       [team.$ref keyed]
-    // "Team Clean Sheet"               -> CS prob (one-sided yes price) [team.$ref keyed]
-    // "Both Teams To Score"            -> BTTS prob (one-sided)
-    // One-sided prices carry ~half a typical 8% two-way overround — trim with ×0.96.
+    // --- team xG from fully two-sided markets: 3-way moneyline + match total O/U 2.5.
+    // (DK team-level props list Yes/No as separate items both priced under current.over,
+    // with no side label — orientation is ambiguous, so we do NOT trust them blindly.)
     let csH, csA, btts, xgH, xgA;
+    if(pHome != null && typeof oddsItem?.overOdds === 'number' && typeof oddsItem?.underOdds === 'number' && oddsItem?.overUnder === 2.5){
+      const [pOver25] = devig([americanToProb(oddsItem.overOdds), americanToProb(oddsItem.underOdds)]);
+      const {lamH, lamA} = solveLambdas(pHome, pAway, pOver25);
+      if(lamH > 0.15 && lamH < 4.5 && lamA > 0.15 && lamA < 4.5){ xgH = lamH; xgA = lamA; }
+    }
+
+    // --- CS / BTTS from prop PAIRS, orientation resolved against the Poisson anchor.
+    // Each market's Yes and No arrive as two same-type items; devig the pair, then pick
+    // the side closest to the model anchor (cs ≈ e^-lamOpp, btts ≈ (1-e^-lamH)(1-e^-lamA)).
     const teamIdOf = ref => (ref || '').match(/teams\/(\d+)/)?.[1];
     const homeId = teamIdOf(oddsItem?.homeTeamOdds?.team?.$ref);
     const awayId = teamIdOf(oddsItem?.awayTeamOdds?.team?.$ref);
@@ -161,7 +189,21 @@ async function main(){
       if(typeof o.value === 'number' && o.value > 1) return 1 / o.value;   // decimal odds
       return null;
     };
-    if(oddsItem && homeId && awayId){
+    // devig a yes/no pair and return the side nearest the anchor; single price → trim vig,
+    // accept only if within 0.22 of the anchor (otherwise it may be the wrong side).
+    const resolvePair = (prices, anchor) => {
+      if(anchor == null) return null;
+      if(prices.length >= 2){
+        const [q1] = devig([prices[0], prices[1]]);
+        return Math.abs(q1 - anchor) <= Math.abs((1 - q1) - anchor) ? q1 : 1 - q1;
+      }
+      if(prices.length === 1){
+        const q = prices[0] * 0.96;
+        return Math.abs(q - anchor) <= 0.22 ? q : null;
+      }
+      return null;
+    };
+    if(oddsItem && homeId && awayId && xgH != null){
       try {
         const pid = oddsItem.provider?.id ?? 100;
         const propBase = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}/odds/${pid}/propBets`;
@@ -171,28 +213,27 @@ async function main(){
           props.push(...(pj.items||[]));
           if(props.length >= (pj.count||0)) break;
         }
+        const csPrices = {[homeId]:[], [awayId]:[]};
+        const bttsPrices = [];
         for(const p of props){
-          const tname = p.type?.name;
-          const tid = teamIdOf(p.team?.$ref);
-          const isHome = tid === homeId, isAway = tid === awayId;
-          if(!tname) continue;
-          if(tname === 'Team Total Goals' && p.current?.target?.value === 1.5){
-            const prob = probFromPrice(p.current?.over);
-            if(prob != null){
-              const lamb = poissonFromOver15(prob * 0.96);
-              if(isHome) xgH = lamb; else if(isAway) xgA = lamb;
-            }
-          } else if(tname === 'Team Clean Sheet'){
-            const prob = probFromPrice(p.current?.over);
-            if(prob != null){
-              if(isHome) csH = prob * 0.96; else if(isAway) csA = prob * 0.96;
-            }
-          } else if(tname === 'Both Teams To Score'){
-            const prob = probFromPrice(p.current?.over);
-            if(prob != null) btts = prob * 0.96;
+          const prob = probFromPrice(p.current?.over);
+          if(prob == null) continue;
+          if(p.type?.name === 'Team Clean Sheet'){
+            const tid = teamIdOf(p.team?.$ref);
+            if(csPrices[tid]) csPrices[tid].push(prob);
+          } else if(p.type?.name === 'Both Teams To Score'){
+            bttsPrices.push(prob);
           }
         }
+        csH  = resolvePair(csPrices[homeId], Math.exp(-xgA));
+        csA  = resolvePair(csPrices[awayId], Math.exp(-xgH));
+        btts = resolvePair(bttsPrices, (1 - Math.exp(-xgH)) * (1 - Math.exp(-xgA)));
       } catch(err){ console.warn(`[props] ${h}v${a}: ${err.message}`); }
+      // Poisson fallback keeps CS coverage complete even when prop pairs are unusable
+      if(csH == null) csH = Math.exp(-xgA);
+      if(csA == null) csA = Math.exp(-xgH);
+      const clamp = v => v == null ? v : Math.min(0.90, Math.max(0.03, v));
+      csH = clamp(csH); csA = clamp(csA); btts = clamp(btts);
     }
 
     const r3 = v => v == null ? undefined : Math.round(v*10000)/10000;
