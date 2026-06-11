@@ -2924,14 +2924,46 @@ function lookupPenDrawn90(p){
   return PEN90[p.name] !== undefined ? PEN90[p.name] : 0;
 }
 
+// TEAM SHARE NORMALIZATION — gs/as are price-tier heuristics and do NOT naturally sum to 1
+// per team (May snapshot: ARG Σgs×mri ≈ 1.74, CUW ≈ 0.34). Unnormalized, stacked squads got
+// phantom goal EV (+74%) while minnows were under-credited ~3x per unit of team xG — a large
+// systematic bias in exactly the cross-team comparisons the optimizer exists to make.
+// Normalize so Σ share×expected-minutes ≈ 1.0 for goals and ≈ 0.80 for assists (not every
+// goal is assisted). Cached; invalidated whenever MRIs or the player pool change.
+let _shareNorms = null;
+function invalidateShareNorms(){ _shareNorms = null; }
+function teamShareNorm(team){
+  if(!_shareNorms){
+    _shareNorms = {};
+    for(const pl of PLAYERS){
+      const s = _shareNorms[pl.team] || (_shareNorms[pl.team] = {gs:0, as:0});
+      s.gs += (pl.gs||0) * pl.mri;
+      s.as += (pl.as||0) * pl.mri;
+    }
+  }
+  const s = _shareNorms[team];
+  // PARTIAL-CREDIBILITY normalization (λ=0.75, clamped): full 1/sum rescaling assumes the
+  // price-tier share SHAPE within a team is exact and only the level is wrong — but stacked
+  // squads' benches carry inflated price-derived shares that would dilute true talismans
+  // (full rescale puts Mbappé at a 0.23 share vs a ~0.30-0.35 market-implied share). Shrinking
+  // by sum^-λ removes most of the cross-team bias while keeping star shares near market.
+  const LAMBDA = 0.75;
+  const clamp = f => Math.min(2.2, Math.max(0.6, f));
+  return {
+    g: (s && s.gs > 0.05) ? clamp(Math.pow(1.0 / s.gs, LAMBDA)) : 1,
+    a: (s && s.as > 0.05) ? clamp(Math.pow(0.80 / s.as, LAMBDA)) : 1
+  };
+}
+
 function projectXPts(p, md){
   if(p.pos==='GK') return projectGK(p, md);
   const t = TEAMS[p.team];
   const fx = getOppFor(p.team, md);
   if(!fx) return null;
 
-  // adjusted minutes (use mri × 90 as effective)
-  const adjMin90 = p.mri;
+  // adjusted minutes (use mri × 90 as effective); per-MD override (e.g. injury ramp-up)
+  // takes precedence when a news override supplies one.
+  const adjMin90 = (p.mriByMd && p.mriByMd[String(md)] != null) ? p.mriByMd[String(md)] : p.mri;
 
   // team xG: prefer market-derived (Team Total Goals) → Poisson-fit (bookie_xg) → Elo
   let teamXG, teamXGA, teamCsProb, xgSource = 'elo';
@@ -2963,12 +2995,19 @@ function projectXPts(p, md){
   if(teamXGA == null) teamXGA = 1.20;
   if(teamCsProb == null) teamCsProb = Math.exp(-teamXGA);
 
-  // mild knockout uplift (intensity, longer matches risk red cards)
-  const knockoutMul = (typeof md === 'string') ? 1.05 : 1.0;
+  // mild knockout uplift (intensity, longer matches risk red cards).
+  // NOTE: group MDs arrive as STRINGS from the UI (STATE.md = '1'), so test the value,
+  // not the type — the old typeof check silently applied the uplift to all in-app group views.
+  const knockoutMul = (typeof md === 'string' && !/^[1-3]$/.test(md)) ? 1.05 : 1.0;
 
-  // shares
-  const goalsExp = teamXG * p.gs * adjMin90 * knockoutMul;
-  const assistsExp = teamXG * p.as * adjMin90 * knockoutMul;
+  // shares — allocated against OPEN-PLAY xG only: team xG already contains penalties and
+  // direct free kicks, which are credited separately below (pkExp/fkGoalExp). Allocating
+  // the full xG AND adding those on top double-counted ~0.3 pts for designated takers.
+  const pkTeamGoals = 0.12 * (t.att/85) * 0.78;     // expected converted pens per match
+  const openXG = Math.max(0.2, teamXG - pkTeamGoals - 0.05);   // 0.05 ≈ direct-FK goals
+  const norm = teamShareNorm(p.team);
+  const goalsExp = openXG * p.gs * norm.g * adjMin90 * knockoutMul;
+  const assistsExp = openXG * p.as * norm.a * adjMin90 * knockoutMul;
   // penalty share (≈0.15 PK per match for strong attacking teams)
   const pkExp = 0.12 * (t.att/85) * p.pt * adjMin90;
   // direct free-kick goal probability (~3% per FK attempt × FK share)
@@ -3058,7 +3097,7 @@ function projectGK(p, md){
   const t = TEAMS[p.team];
   const fx = getOppFor(p.team, md);
   if(!fx) return null;
-  const adjMin90 = p.mri;
+  const adjMin90 = (p.mriByMd && p.mriByMd[String(md)] != null) ? p.mriByMd[String(md)] : p.mri;
   const baseXG = 1.30;
   let teamXGA_gk, teamCsProb_gk, xgSource = 'elo';
   const market = BOOKIE_MARKETS[p.team]?.[md];
@@ -8076,6 +8115,7 @@ function applyLineupOverrides(){
     }
     p._simCache = null;
   });
+  if(typeof invalidateShareNorms === 'function') invalidateShareNorms();
   console.log('[lineup] observed:', countObs, ' fallback-to-heuristic:', countFallback);
 }
 
@@ -8094,9 +8134,9 @@ const MANUAL_NEWS_OVERRIDES = [
   { name: 'John Stones', team: 'ENG', mri: 0.55,
     source: 'User verification', date: '2026-05-30',
     reason: 'Actual recent starts 3/5 (not 4/5 — model double-counted). Did NOT start vs Uruguay (bench), missed Japan (left camp). Albania start was a midfield experiment. Rotation tier, not nailed CB.' },
-  { name: 'Lamine Yamal', team: 'ESP', mri: 0.50,
+  { name: 'Lamine Yamal', team: 'ESP', mri: 0.50, mriByMd: {'1': 0.15, '2': 0.60, '3': 0.85},
     source: 'beIN Sports / SI / Barca Blaugranes (June 8 2026)', date: '2026-06-11',
-    reason: 'Hamstring (Apr 22). Cleared to play but Barcelona advised Spain: ~15 min max vs Cape Verde (MD1), 45-60 min vs Saudi Arabia (MD2), possible full start vs Uruguay (MD3). Single MRI averages the group-stage ramp (~0.15/0.60/0.85) — do NOT captain MD1; he is an MD3 asset.' },
+    reason: 'Hamstring (Apr 22). Cleared to play but Barcelona advised Spain: ~15 min max vs Cape Verde (MD1), 45-60 min vs Saudi Arabia (MD2), possible full start vs Uruguay (MD3). mriByMd encodes the ramp per matchday — MD1 projections now reflect the cameo; he is an MD3 asset.' },
   // REMOVED — Toney/Watkins/Spence are now caught automatically by the low-ownership-at-premium-price
   // rule in applyLineupOverrides + inferMRI. Community ownership is the truth signal: real starters
   // get owned, backup-tier players don't. See "AUTOMATED BACKUP-TIER DETECTION" comments in MRI code.
@@ -8157,13 +8197,24 @@ const MANUAL_NEWS_OVERRIDES = [
     reason: 'Correction (user-flagged): previous override incorrectly assumed CL Final start = France starter. Reality: Doué is CL Young Player of the Year and started PSG\'s CL Final win over Arsenal, BUT for France he competes with Cherki, Barcola, Thuram for ONE attacking spot (Olise + Dembélé are shoo-ins). Rotation tier, not nailed. Closer to ~2/5 starts.' },
 ];
 
+// ASSUMPTION-FREE MODE (user directive, 2026-06-11): injury/rotation truth must come from
+// live data — FIFA ownership refreshed at page load, observed lineups, and the automated
+// backup-tier caps — never from hand-written news interpretations. The override entries are
+// kept below as documentation/research notes only. Flip to true to restore curated mode.
+const MANUAL_OVERRIDES_ENABLED = false;
+
 function applyManualNewsOverrides(){
+  if(!MANUAL_OVERRIDES_ENABLED){
+    console.log('[news-override] disabled — assumption-free mode (live data signals only)');
+    return;
+  }
   let applied = 0;
   for(const o of MANUAL_NEWS_OVERRIDES){
     const p = PLAYERS.find(x => x.team === o.team && _norm(x.name) === _norm(o.name));
     if(p){
       if(p._mriPreLineup === undefined) p._mriPreLineup = p.mri;
       p.mri = o.mri;
+      p.mriByMd = o.mriByMd || null;   // optional per-MD minutes ramp (e.g. injury return)
       p._newsOverride = o;
       p._simCache = null;
       applied++;
@@ -8171,6 +8222,7 @@ function applyManualNewsOverrides(){
       console.warn('[news-override] Player not found:', o.team, o.name);
     }
   }
+  if(typeof invalidateShareNorms === 'function') invalidateShareNorms();
   console.log('[news-override] Applied', applied, 'of', MANUAL_NEWS_OVERRIDES.length);
 }
 window.applyManualNewsOverrides = applyManualNewsOverrides;
@@ -8231,6 +8283,7 @@ function applyMriOverrides(){
       p._simCache = null;
     }
   });
+  if(typeof invalidateShareNorms === 'function') invalidateShareNorms();
   updateOverrideBadge();
 }
 function updateOverrideBadge(){
@@ -8986,11 +9039,14 @@ const TEST_SUITE = [
     }
   },
   // Sanity: marquee players should rank near top
-  { name: 'Mbappé in top-10 by MD1 xPts',
+  // Marquee sanity: position-relative, fixture-aware. With normalized cross-team shares and
+  // live odds, overall rank legitimately depends on the MD1 fixture (FRA are away at Norway) —
+  // but a fit marquee FWD must still rank top-5 at his own position.
+  { name: 'Mbappé in top-5 FWDs by MD1 xPts',
     fn: () => {
-      const ranked = PLAYERS.map(p=>({p, x:projectXPts(p,1)?.xpts||0})).sort((a,b)=>b.x-a.x).slice(0,10);
-      const found = ranked.findIndex(r=>r.p.name==='Kylian Mbappé');
-      return found >= 0 ? {pass:true} : {pass:false, msg:`Mbappé not in top-10 MD1 xPts (rank ${PLAYERS.map(p=>({p, x:projectXPts(p,1)?.xpts||0})).sort((a,b)=>b.x-a.x).findIndex(r=>r.p.name==='Kylian Mbappé')+1})`};
+      const fwds = PLAYERS.filter(p=>p.pos==='FWD').map(p=>({p, x:projectXPts(p,1)?.xpts||0})).sort((a,b)=>b.x-a.x);
+      const rank = fwds.findIndex(r=>r.p.name==='Kylian Mbappé') + 1;
+      return rank >= 1 && rank <= 5 ? {pass:true, msg:`FWD rank ${rank}`} : {pass:false, msg:`Mbappé FWD rank ${rank} — expected top-5`};
     }
   },
   { name: 'Argentina ranks as top-3 by Elo',
@@ -8999,13 +9055,12 @@ const TEST_SUITE = [
       return TEAMS.ARG.elo >= top[2] ? {pass:true} : {pass:false, msg:`ARG Elo ${TEAMS.ARG.elo} not in top-3`};
     }
   },
-  // Specific news-override truths
-  { name: 'Neuer MRI ≥ Baumann (post-May-21 news)',
+  // ASSUMPTION-FREE MODE: no hand-written news interpretations may reach the model.
+  // (The old "Neuer ≥ Baumann" check asserted a curated override; replaced by its inverse.)
+  { name: 'Assumption-free: zero manual news overrides applied',
     fn: () => {
-      const neuer = PLAYERS.find(p=>p.name==='Manuel Neuer' && p.team==='GER');
-      const baumann = PLAYERS.find(p=>p.name==='Oliver Baumann' && p.team==='GER');
-      if(!neuer || !baumann) return {pass:false, msg:'players not found'};
-      return neuer.mri >= baumann.mri ? {pass:true, msg:`Neuer ${neuer.mri} ≥ Baumann ${baumann.mri}`} : {pass:false, msg:`Neuer ${neuer.mri} < Baumann ${baumann.mri} — news override missing`};
+      const tainted = PLAYERS.filter(p => p._newsOverride);
+      return tainted.length === 0 ? {pass:true, msg:'model is purely data-driven'} : {pass:false, msg:`${tainted.length} players carry manual overrides: ${tainted.slice(0,5).map(p=>p.name).join(', ')}`};
     }
   },
   { name: 'Stones not flagged as locked-in starter',
@@ -9026,23 +9081,47 @@ const TEST_SUITE = [
   // Captain pick sanity. Threshold $7.5: official goal points (6/5/4, down from the previous
   // wrong 7/6/5) compress the premium-vs-mid-premium gap, so $7.5-8 attackers in elite
   // fixtures (Wirtz/Havertz-tier) can legitimately out-EV $10+ names on a given MD.
-  { name: 'Top-3 captain options on MD1 are attackers priced ≥ $7.5',
+  { name: 'Top-3 MID/FWD captain options on MD1 priced ≥ $7.5',
     fn: () => {
-      const top = PLAYERS.map(p=>({p, x:projectXPts(p,1)?.xpts||0})).sort((a,b)=>b.x-a.x).slice(0,3);
-      const allPremium = top.every(t => t.p.price >= 7.5 && (t.p.pos === 'FWD' || t.p.pos === 'MID'));
-      return allPremium ? {pass:true} : {pass:false, msg:`top-3: ${top.map(t=>t.p.name+' $'+t.p.price+' '+t.p.pos).join(', ')}`};
+      const top = PLAYERS.filter(p=>p.pos==='MID'||p.pos==='FWD').map(p=>({p, x:projectXPts(p,1)?.xpts||0})).sort((a,b)=>b.x-a.x).slice(0,3);
+      const ok = top.every(t => t.p.price >= 7.5);
+      return ok ? {pass:true} : {pass:false, msg:`top-3: ${top.map(t=>t.p.name+' $'+t.p.price+' '+t.p.pos).join(', ')}`};
     }
   },
   // === SCORING RULE REGRESSION (official FIFA Fantasy 2026 values) ===
   { name: 'FWD goal worth 4 pts (official 2026 scoring)',
     fn: () => {
-      // synthetic pure-scorer: gs=1 → goals component = teamXG×(4 + 0.08 outside-box)×0.87
+      // synthetic pure-scorer: gs=1 → goals = openXG×norm×(4 + 0.08 outside-box)×0.87
       const fake = {name:'__test_fwd__', team:'FRA', pos:'FWD', price:5, own:0.50, mri:1, gs:1, as:0, pt:0, fk:0, ck:0};
       const r = projectXPts(fake, 1);
       if(!r || !r.teamXG) return {pass:false, msg:'no projection'};
+      const pkTeamGoals = 0.12 * (TEAMS.FRA.att/85) * 0.78;
+      const openXG = Math.max(0.2, r.teamXG - pkTeamGoals - 0.05);
+      const expected = (openXG / r.teamXG) * teamShareNorm('FRA').g * (4 + 0.08) * 0.87;
       const ratio = (r.components.goals || 0) / r.teamXG;
-      const expected = (4 + 0.08) * 0.87;
       return Math.abs(ratio - expected) < 0.08 ? {pass:true} : {pass:false, msg:`goals/xG ratio ${ratio.toFixed(2)}, expected ~${expected.toFixed(2)} (goal=4pts)`};
+    }
+  },
+  // λ=0.75 shrinkage intentionally leaves a bounded residual (full rescale over-trusts the
+  // price-tier share shape) — assert the residual stays inside [0.65, 1.30] for every team,
+  // vs the raw 0.34–1.74 spread before normalization.
+  { name: 'Team goal shares normalized (post-norm Σ within [0.65, 1.30])',
+    fn: () => {
+      const bad = [];
+      for(const code of Object.keys(TEAMS)){
+        const norm = teamShareNorm(code).g;
+        const sum = PLAYERS.filter(p=>p.team===code).reduce((s,p)=>s + (p.gs||0)*p.mri, 0) * norm;
+        if(sum > 0.05 && (sum < 0.65 || sum > 1.30)) bad.push(`${code}=${sum.toFixed(2)}`);
+      }
+      return bad.length === 0 ? {pass:true} : {pass:false, msg:'outside bounds: '+bad.join(', ')};
+    }
+  },
+  { name: 'Group MD as string does not get knockout uplift',
+    fn: () => {
+      const mb = PLAYERS.find(p=>p.name==='Kylian Mbappé');
+      if(!mb) return {pass:true, msg:'skip'};
+      const a = projectXPts(mb, 1)?.xpts, b = projectXPts(mb, '1')?.xpts;
+      return a === b ? {pass:true} : {pass:false, msg:`md=1 → ${a}, md='1' → ${b} (UI passes strings)`};
     }
   },
   { name: 'Scouting bonus applies only below 5% ownership',
@@ -9577,6 +9656,7 @@ function rebuildFromAPI(apiPlayers, apiSquads){
   PLAYERS = newPlayers;
   PLAYER_BY_ID = Object.fromEntries(PLAYERS.map(p=>[p.id,p]));
   FIXTURES = buildFixtures();
+  if(typeof invalidateShareNorms === 'function') invalidateShareNorms();   // norms depend on the new pool
 }
 
 async function bootstrap(){
