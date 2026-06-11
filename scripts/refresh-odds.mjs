@@ -126,51 +126,70 @@ async function main(){
     const mdH = teamGameNo[h], mdA = teamGameNo[a];
     if(mdH > 3 || mdA > 3) continue;   // group stage only
 
-    // --- gather odds items: scoreboard inline first, then event odds endpoint (deref'd) ---
-    let oddsItems = comp.odds || [];
+    // --- odds item: core endpoint first (carries team $refs + propBets), scoreboard fallback ---
     let pHome, pDraw, pAway, oddsItem = null;
-    const pickItem = items => items.find(it => mlValue(it?.homeTeamOdds) != null && mlValue(it?.drawOdds ?? it?.drawTeamOdds) != null)
-                          || items.find(it => mlValue(it?.homeTeamOdds) != null);
-    oddsItem = pickItem(oddsItems);
-    if(!oddsItem){
-      try { oddsItems = await deref((await getJSON(EVENT_ODDS(e.id)))?.items); oddsItem = pickItem(oddsItems); }
-      catch(err){ console.warn(`[odds] ${h}v${a}: ${err.message}`); }
-    }
-    if(oddsItem){
-      const mlH = mlValue(oddsItem.homeTeamOdds);
-      const mlD = mlValue(oddsItem.drawOdds ?? oddsItem.drawTeamOdds);
-      const mlA = mlValue(oddsItem.awayTeamOdds);
+    try {
+      const items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items);
+      oddsItem = items.find(it => String(it?.provider?.id) === '100') || items[0];   // DraftKings = 100
+    } catch(err){ console.warn(`[odds] ${h}v${a}: ${err.message}`); }
+    const inline = (comp.odds || [])[0];
+    const mlSrc = oddsItem || inline;
+    if(mlSrc){
+      const mlH = mlValue(mlSrc.homeTeamOdds);
+      const mlD = mlValue(mlSrc.drawOdds ?? mlSrc.drawTeamOdds);
+      const mlA = mlValue(mlSrc.awayTeamOdds);
       if(mlH != null && mlD != null && mlA != null){
         [pHome, pDraw, pAway] = devig([mlH, mlD, mlA].map(americanToProb));
       }
-    } else if(oddsItems.length){
-      dumpShapeOnce('odds item (no moneyline recognized)', oddsItems[0]);
     }
 
-    // --- props: follow the odds item's own propBets link (no hardcoded provider path) ---
+    // --- props (DraftKings via core API; structures confirmed by --probe 2026-06-11) ---
+    // "Team Total Goals" (target 1.5)  -> Poisson-solved team xG       [team.$ref keyed]
+    // "Team Clean Sheet"               -> CS prob (one-sided yes price) [team.$ref keyed]
+    // "Both Teams To Score"            -> BTTS prob (one-sided)
+    // One-sided prices carry ~half a typical 8% two-way overround — trim with ×0.96.
     let csH, csA, btts, xgH, xgA;
-    const propRef = oddsItem?.propBets?.$ref;
-    if(propRef){
+    const teamIdOf = ref => (ref || '').match(/teams\/(\d+)/)?.[1];
+    const homeId = teamIdOf(oddsItem?.homeTeamOdds?.team?.$ref);
+    const awayId = teamIdOf(oddsItem?.awayTeamOdds?.team?.$ref);
+    const probFromPrice = o => {
+      if(!o) return null;
+      if(typeof o.american === 'string' || typeof o.american === 'number'){
+        const n = typeof o.american === 'string' ? parseInt(o.american.replace('+',''), 10) : o.american;
+        if(Number.isFinite(n)) return americanToProb(n);
+      }
+      if(typeof o.value === 'number' && o.value > 1) return 1 / o.value;   // decimal odds
+      return null;
+    };
+    if(oddsItem && homeId && awayId){
       try {
-        const props = await deref((await getJSON(propRef + (propRef.includes('?') ? '&' : '?') + 'limit=300'))?.items);
-        if(props.length) dumpShapeOnce('propBet', props[0]);
+        const pid = oddsItem.provider?.id ?? 100;
+        const propBase = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}/odds/${pid}/propBets`;
+        const props = [];
+        for(let page=1; page<=5; page++){
+          const pj = await getJSON(`${propBase}?limit=200&page=${page}`);
+          props.push(...(pj.items||[]));
+          if(props.length >= (pj.count||0)) break;
+        }
         for(const p of props){
-          const name = (p.name || p.propBetTypeName || p.type?.name || '').toLowerCase();
-          const target = (p.athleteOrTeamName || p.teamName || p.team?.displayName || '').toLowerCase();
-          const isHome = target && home.team.displayName.toLowerCase().includes(target.split(' ')[0]);
-          const over = mlValue(p.current?.over ?? p.over);
-          const yes  = mlValue(p.current?.yes ?? p.yes);
-          const no   = mlValue(p.current?.no ?? p.no);
-          if(name.includes('total goals') && name.includes('1.5') && over != null){
-            const lamb = poissonFromOver15(americanToProb(over));
-            if(isHome) xgH = lamb; else xgA = lamb;
-          }
-          if(name.includes('clean sheet') && yes != null && no != null){
-            const [pYes] = devig([americanToProb(yes), americanToProb(no)]);
-            if(isHome) csH = pYes; else csA = pYes;
-          }
-          if((name.includes('both teams to score') || name.includes('btts')) && yes != null && no != null){
-            [btts] = devig([americanToProb(yes), americanToProb(no)]);
+          const tname = p.type?.name;
+          const tid = teamIdOf(p.team?.$ref);
+          const isHome = tid === homeId, isAway = tid === awayId;
+          if(!tname) continue;
+          if(tname === 'Team Total Goals' && p.current?.target?.value === 1.5){
+            const prob = probFromPrice(p.current?.over);
+            if(prob != null){
+              const lamb = poissonFromOver15(prob * 0.96);
+              if(isHome) xgH = lamb; else if(isAway) xgA = lamb;
+            }
+          } else if(tname === 'Team Clean Sheet'){
+            const prob = probFromPrice(p.current?.over);
+            if(prob != null){
+              if(isHome) csH = prob * 0.96; else if(isAway) csA = prob * 0.96;
+            }
+          } else if(tname === 'Both Teams To Score'){
+            const prob = probFromPrice(p.current?.over);
+            if(prob != null) btts = prob * 0.96;
           }
         }
       } catch(err){ console.warn(`[props] ${h}v${a}: ${err.message}`); }
