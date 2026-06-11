@@ -45,13 +45,15 @@ function matchProbs(lamH, lamA){
   }
   return {pH, pD};
 }
-function solveLambdas(pHome, pAway, pOver25){
-  // total T from P(NH+NA >= 3) = pOver25, NH+NA ~ Poisson(T)
-  let lo = 0.2, hi = 7;
+function solveLambdas(pHome, pAway, pOver, line){
+  // total T from P(NH+NA >= ceil(line)) = pOver, NH+NA ~ Poisson(T).
+  // Heavy favorites are priced at 3.5 (or higher) totals, so support any half-goal line.
+  const k = Math.ceil(line);   // need at least k goals to clear the line
+  const pAtLeastK = T => { let cdf = 0, term = Math.exp(-T); for(let i=0;i<k;i++){ cdf += term; term *= T/(i+1); } return 1 - cdf; };
+  let lo = 0.2, hi = 8;
   for(let i=0;i<60;i++){
     const T = (lo+hi)/2;
-    const p = 1 - Math.exp(-T)*(1 + T + T*T/2);
-    if(p < pOver25) lo = T; else hi = T;
+    if(pAtLeastK(T) < pOver) lo = T; else hi = T;
   }
   const T = (lo+hi)/2;
   // split T so the model's home-win share matches the devigged moneyline
@@ -168,9 +170,11 @@ async function main(){
     // (DK team-level props list Yes/No as separate items both priced under current.over,
     // with no side label — orientation is ambiguous, so we do NOT trust them blindly.)
     let csH, csA, btts, xgH, xgA;
-    if(pHome != null && typeof oddsItem?.overOdds === 'number' && typeof oddsItem?.underOdds === 'number' && oddsItem?.overUnder === 2.5){
-      const [pOver25] = devig([americanToProb(oddsItem.overOdds), americanToProb(oddsItem.underOdds)]);
-      const {lamH, lamA} = solveLambdas(pHome, pAway, pOver25);
+    const totLine = oddsItem?.overUnder;
+    if(pHome != null && typeof oddsItem?.overOdds === 'number' && typeof oddsItem?.underOdds === 'number'
+       && typeof totLine === 'number' && totLine >= 1.5 && totLine <= 5.5 && totLine % 1 === 0.5){
+      const [pOver] = devig([americanToProb(oddsItem.overOdds), americanToProb(oddsItem.underOdds)]);
+      const {lamH, lamA} = solveLambdas(pHome, pAway, pOver, totLine);
       if(lamH > 0.15 && lamH < 4.5 && lamA > 0.15 && lamA < 4.5){ xgH = lamH; xgA = lamA; }
     }
 

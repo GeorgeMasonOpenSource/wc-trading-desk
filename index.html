@@ -9114,9 +9114,11 @@ const TEST_SUITE = [
   },
   // Scouting bonus is a CONFIRMED official rule (+2 for <5%-owned scoring 4+), so the old
   // "strict mode: scoutEV = 0" assertion is inverted: differentials must carry scout EV.
+  // Sample needs real attacking involvement (gs+as ≥ 0.15): components.scout is rounded to
+  // one decimal for display, so near-zero scout EVs legitimately show as 0.0.
   { name: 'Scouting bonus present for sub-5% owned differentials',
     fn: () => {
-      const samples = PLAYERS.filter(p=>p.own < 0.05 && p.pos !== 'GK' && p.mri >= 0.7).slice(0,20);
+      const samples = PLAYERS.filter(p=>p.own < 0.05 && p.pos !== 'GK' && p.mri >= 0.7 && (p.gs + p.as) >= 0.15).slice(0,20);
       const withScout = samples.filter(p => (projectXPts(p, 1)?.components.scout || 0) > 0.001);
       return withScout.length === samples.length ? {pass:true, msg:`scout EV on all ${samples.length} differentials`} : {pass:false, msg:`${samples.length - withScout.length} of ${samples.length} differentials missing scout EV`};
     }
