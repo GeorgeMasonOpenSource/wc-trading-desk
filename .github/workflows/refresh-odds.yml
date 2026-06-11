@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '0 */6 * * *'   # every 6 hours during the tournament
   workflow_dispatch:         # manual trigger from the Actions tab
+    inputs:
+      mode:
+        description: 'apply (refresh + commit) or probe (dump ESPN odds shapes to logs)'
+        default: 'apply'
 
 permissions:
   contents: write
@@ -23,7 +27,7 @@ jobs:
           node-version: 22
 
       - name: Refresh odds snapshot
-        run: node scripts/refresh-odds.mjs --apply
+        run: node scripts/refresh-odds.mjs --${{ github.event.inputs.mode || 'apply' }}
 
       - name: Verify the patched page still parses
         run: |

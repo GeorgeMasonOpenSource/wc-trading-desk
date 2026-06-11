@@ -68,6 +68,40 @@ function dumpShapeOnce(label, obj){
   console.warn(`[debug] ${label} sample shape:`, JSON.stringify(obj).slice(0, 1200));
 }
 
+// --probe: dump the raw odds structures for one event so the parser can be matched to
+// reality from CI logs (this repo's dev sandbox cannot reach ESPN directly).
+async function probe(){
+  const sb = await getJSON(SCOREBOARD);
+  const e = sb.events?.[2] || sb.events?.[0];
+  if(!e) throw new Error('no events');
+  console.log(`[probe] event ${e.id}: ${e.name}`);
+  const inline = e.competitions?.[0]?.odds;
+  console.log('[probe] scoreboard inline odds:', JSON.stringify(inline)?.slice(0, 2500));
+  const idx = await getJSON(EVENT_ODDS(e.id));
+  console.log(`[probe] core odds index: count=${idx.count}, items=${(idx.items||[]).length}`);
+  const items = await deref(idx.items);
+  for(const it of items){
+    console.log(`[probe] --- provider: ${it.provider?.name} (id ${it.provider?.id}) keys: ${Object.keys(it).join(',')}`);
+    console.log('[probe]', JSON.stringify(it).slice(0, 2500));
+    const pid = it.provider?.id;
+    const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
+    if(pid != null){
+      for(const url of [`${base}/odds/${pid}/propBets?limit=10`, `${base}/odds/${pid}/props?limit=10`]){
+        try {
+          const pj = await getJSON(url);
+          console.log(`[probe] ${url} -> count=${pj.count}, sample:`, JSON.stringify(await deref((pj.items||[]).slice(0,2))).slice(0, 2500));
+        } catch(err){ console.log(`[probe] ${url} -> ${err.message}`); }
+      }
+    }
+  }
+  // some leagues expose these at the competition level rather than under odds
+  const cbase = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
+  for(const url of [`${cbase}/probabilities?limit=5`, `${cbase}/predictor`]){
+    try { const pj = await getJSON(url); console.log(`[probe] ${url} ->`, JSON.stringify(pj).slice(0, 800)); }
+    catch(err){ console.log(`[probe] ${url} -> ${err.message}`); }
+  }
+}
+
 async function main(){
   const sb = await getJSON(SCOREBOARD);
   const events = sb.events || [];
@@ -195,4 +229,5 @@ async function main(){
   console.log(`[refresh-odds] patched index.html — snapshot ${today}`);
 }
 
-main().catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
+const PROBE = process.argv.includes('--probe');
+(PROBE ? probe() : main()).catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
