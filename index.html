@@ -191,7 +191,7 @@
     <span>Budget: <b id="conn-budget" class="mono">$100.0m</b></span>
     <span>Squad: <b id="conn-squad" class="mono">0/15</b></span>
     <span>Spend: <b id="conn-spend" class="mono">$0.0m</b></span>
-    <span>MD: <button id="md-prev" style="padding:3px 6px">‹</button> <select id="conn-md" style="margin:0 2px"><option value="1">MD1</option><option value="2">MD2</option><option value="3">MD3</option><option value="R32">R32</option><option value="R16">R16</option><option value="QF">QF</option><option value="SF">SF</option><option value="F">Final</option></select> <button id="md-next" style="padding:3px 6px">›</button></span>
+    <span>MD: <button id="md-prev" style="padding:3px 6px">‹</button> <select id="conn-md" style="margin:0 2px"><option value="1">MD1</option><option value="2">MD2</option><option value="3">MD3</option><option value="R32">R32</option><option value="R16">R16</option><option value="QF">QF</option><option value="SF">SF</option><option value="F">Final</option></select> <button id="md-next" style="padding:3px 6px">›</button> <span class="mono" id="md-autodetect" style="font-size:11px;margin-left:6px"></span></span>
     <span class="dim mono" id="last-updated" style="font-size:11px">Snapshot</span> <span class="dim mono" id="override-badge" style="font-size:11px;display:none"></span> <button id="reset-btn" title="Reset squad">Reset</button>
   </div>
 </header>
@@ -880,6 +880,32 @@ const KICKOFFS = {
   "UZB_1":"2026-06-18T02:00Z","UZB_2":"2026-06-23T17:00Z","UZB_3":"2026-06-27T23:30Z",
 };
 function getKickoff(team, md){ return KICKOFFS[team+'_'+md] || null; }
+
+// Auto-detect the live group matchday from the real schedule + clock. Returns the smallest
+// group MD whose LAST kickoff is still in the future (so MD1 stays "current" until its final
+// game kicks off, even when earlier MD1 games are done). status:'upcoming' before the round's
+// first kickoff, 'in_progress' once it has started. null once all group games are played
+// (knockout dates aren't in KICKOFFS — leave the round on manual).
+function detectCurrentMd(now){
+  const t = (now || new Date()).getTime();
+  for(const md of [1,2,3]){
+    const times = Object.entries(KICKOFFS).filter(([k])=>k.endsWith('_'+md)).map(([,v])=>Date.parse(v)).filter(n=>!isNaN(n));
+    if(!times.length) continue;
+    const first = Math.min(...times), last = Math.max(...times);
+    if(t <= last) return { md:String(md), status: t < first ? 'upcoming' : 'in_progress', first, last };
+  }
+  return null;
+}
+function updateMdBanner(){
+  const el = document.getElementById('md-autodetect');
+  if(!el) return;
+  const d = detectCurrentMd();
+  if(!d){ el.textContent = ''; return; }
+  const next = d.md==='3' ? 'R32' : String(+d.md+1);
+  el.innerHTML = d.status==='in_progress'
+    ? `<span class="warn">● MD${d.md} live</span> <span class="dim">— locked except subs/captain; transfers apply to MD${next}</span>`
+    : `<span class="good">● MD${d.md} upcoming</span> <span class="dim">— deadline at first kickoff</span>`;
+}
 // PRE-COMPUTED slot map — done once at load to keep optimizer hot loops fast.
 // Without this, each kickoffSlot call did O(144) filter+sort, freezing the page when called
 // from squadScore() inside the 200-iter local-search loop (~5M ops).
@@ -5259,7 +5285,12 @@ function recomputePlan(){
   if(STATE.squad.length < 15){ alert('Need 15 players first'); return; }
   document.getElementById('plan-status').textContent = 'Computing...';
   const allowHits = document.getElementById('plan-allow-hits').checked;
-  const allowWildcard = document.getElementById('plan-allow-wildcard').checked;
+  // Wildcard can't be planned if it's already been spent — force it off and reflect in the UI.
+  const wcUsed = (STATE.chipsUsed || []).includes('Wildcard');
+  const wcBox = document.getElementById('plan-allow-wildcard');
+  if(wcUsed){ wcBox.checked = false; wcBox.disabled = true; wcBox.title = 'Wildcard already used'; }
+  else { wcBox.disabled = false; wcBox.title = ''; }
+  const allowWildcard = wcBox.checked && !wcUsed;
   const startMd = document.getElementById('plan-start-md').value;
   const maxT = parseInt(document.getElementById('plan-max-transfers').value) || 2;
   const spend = STATE.squad.reduce((a,id)=>a + PLAYER_BY_ID[id].price, 0);
@@ -9469,6 +9500,14 @@ function importSquadFromText(){
   if(resolved.length !== 15) warn.push(`Loaded ${resolved.length}/15 players`);
   if(cnt.GK!==2||cnt.DEF!==5||cnt.MID!==5||cnt.FWD!==3) warn.push(`Formation ${cnt.GK}-${cnt.DEF}-${cnt.MID}-${cnt.FWD} (need 2-5-5-3)`);
   if(overCap.length) warn.push(`Over country cap: ${overCap.map(([k,v])=>k+'='+v).join(', ')}`);
+  // Bank reconcile: prices are fixed in this game, so leftover MUST equal budget − spend.
+  // A mismatch means a wrong player resolved (price differs) or a typo in the bank field.
+  if(resolved.length === 15 && !isNaN(bank)){
+    const impliedBank = STATE.budget - spend;
+    if(Math.abs(impliedBank - bank) > 0.1){
+      warn.push(`Bank mismatch: you entered $${bank.toFixed(1)}m but your 15 imply $${impliedBank.toFixed(1)}m (spend $${spend.toFixed(1)}m on a $${STATE.budget}m budget). Check for a mis-resolved player.`);
+    }
+  }
   const el = document.getElementById('import-squad-result');
   el.innerHTML =
     `<div class="rec ${warn.length||unmatched.length||ambiguous.length?'warn':''}"><div>`+
@@ -9826,6 +9865,12 @@ async function bootstrap(){
       }
     } catch {}
   }
+  // Auto-detect the live group matchday from the schedule (time is truth). Overrides a
+  // stale saved MD so projections/captaincy default to the round actually in play.
+  const det = detectCurrentMd();
+  if(det) STATE.md = det.md;
+  const cm = document.getElementById('conn-md'); if(cm) cm.value = STATE.md;
+  updateMdBanner();
   refresh();
   runOptimizer();
   applyOptimized();
