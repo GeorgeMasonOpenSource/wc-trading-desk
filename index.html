@@ -331,6 +331,23 @@
 
   <!-- TRANSFERS -->
 <section class="page" id="page-transfers">
+  <div class="panel" style="border:1px solid var(--acc)">
+    <h2>📋 Import your squad</h2>
+    <div class="dim" style="margin-bottom:8px;font-size:12px">Paste your actual 15 players from the official game (one per line, or comma-separated — surnames are fine). This loads them into the model so every panel below — transfers, chips, captaincy — works off <b>your</b> team instead of the optimizer's. Then set your bank, free transfers, and tick the chips you've already used.</div>
+    <textarea id="import-squad-text" rows="6" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:12px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:8px" placeholder="Rangel&#10;Tah&#10;Lisandro Martínez&#10;Ricardo Rodríguez&#10;O'Reilly&#10;Wirtz, De Bruyne, Vinícius Júnior&#10;Mbappé, Cristiano Ronaldo, Kane&#10;Galíndez, Elvedi, Xhaka, Casemiro"></textarea>
+    <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <label>Bank: $<input id="import-bank" type="number" value="0" step="0.1" style="width:60px">m</label>
+      <label>Free transfers: <input id="import-free" type="number" value="2" min="0" max="3" style="width:50px"></label>
+      <span class="dim" style="font-size:11px">Chips already used:</span>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Wildcard"> Wildcard</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="12th Man"> 12th Man</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Maximum Captain"> Max Captaincy</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Qualification Booster"> Qualification</label>
+      <button class="primary" id="import-squad-btn">Import squad</button>
+    </div>
+    <div id="import-squad-result" style="margin-top:8px"></div>
+  </div>
+  <div style="height:12px"></div>
   <div class="panel">
     <h2>Multi-MD Transfer Plan ("Cheat Code")</h2>
     <div class="dim" style="margin-bottom:10px;font-size:12px">Greedy per-MD optimizer respecting FT allocation (2/MD + carry 1), hit costs (-3 per extra transfer), country caps escalating by stage, and chip availability. Plan recomputes from your current squad whenever you click "Recompute".</div>
@@ -4352,6 +4369,7 @@ const STATE = {
   viceId: null,
   pins: new Set(),
   excludes: new Set(),
+  chipsUsed: [],     // chips already spent (excluded from the chip planner)
 };
 
 function refresh(){
@@ -9374,9 +9392,12 @@ function computeOptimalChipPlan(squadIds){
       pickPlayer: null,
     },
   ];
-  // Add specific player picks if squad is filled
+  // Drop chips the user has already spent (set via the squad importer), then add specific
+  // player picks for the chips that remain.
+  const used = (STATE.chipsUsed || []).map(c => _norm(c));
+  const activePlan = plan.filter(c => !used.some(u => _norm(c.chip).includes(u) || u.includes(_norm(c.chip).split(' ')[0])));
   if(sq.length >= 11){
-    plan.forEach(c=>{
+    activePlan.forEach(c=>{
       if(c.chip === '12th Man'){
         const tm = bestTwelfthMan(sq.map(p=>p.id), c.primary);
         if(tm) c.pickPlayer = tm.p;
@@ -9389,8 +9410,74 @@ function computeOptimalChipPlan(squadIds){
       }
     });
   }
-  return plan;
+  return activePlan;
 }
+
+// ---------- SQUAD IMPORTER ----------
+// Resolve a free-text list of player names (one per line or comma-separated) to player IDs
+// and load them into STATE.squad, so the transfer/chip/captaincy panels run off the user's
+// real team. Surnames and accent-free spellings both work.
+function resolvePlayerName(token){
+  const q = _norm(token);
+  if(!q) return null;
+  // 1) exact full-name match
+  let hit = PLAYERS.filter(p => _norm(p.name) === q);
+  if(hit.length === 1) return {p: hit[0]};
+  // 2) surname (last word) exact match
+  const surname = q.split(' ').pop();
+  hit = PLAYERS.filter(p => _norm(p.name).split(' ').pop() === surname);
+  if(hit.length === 1) return {p: hit[0]};
+  // 3) any player whose name contains the token (or vice-versa)
+  let contains = PLAYERS.filter(p => _norm(p.name).includes(q) || q.includes(_norm(p.name)));
+  if(contains.length === 1) return {p: contains[0]};
+  // ambiguous → return candidates so the user can disambiguate
+  const cands = (hit.length ? hit : contains).slice(0, 6);
+  return cands.length ? {ambiguous: cands} : null;
+}
+
+function importSquadFromText(){
+  const text = document.getElementById('import-squad-text').value || '';
+  const tokens = text.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
+  const resolved = [], unmatched = [], ambiguous = [];
+  const seen = new Set();
+  for(const tok of tokens){
+    const r = resolvePlayerName(tok);
+    if(!r) { unmatched.push(tok); continue; }
+    if(r.ambiguous) { ambiguous.push({tok, cands:r.ambiguous}); continue; }
+    if(seen.has(r.p.id)) continue;
+    seen.add(r.p.id); resolved.push(r.p);
+  }
+  // Load whatever resolved (cap 15) so panels light up even if a couple need fixing.
+  STATE.squad = resolved.slice(0,15).map(p=>p.id);
+  STATE.budget = STATE.md && !/^[1-3]$/.test(STATE.md) ? 105 : 100;   // +$5m at knockouts
+  const bank = parseFloat(document.getElementById('import-bank').value);
+  const free = parseInt(document.getElementById('import-free').value, 10);
+  STATE.chipsUsed = [...document.querySelectorAll('.import-chip-used:checked')].map(c=>c.value);
+  // mirror bank/FT into the scenario inputs
+  const trBank = document.getElementById('tr-bank'); if(trBank && !isNaN(bank)) trBank.value = bank;
+  const trFree = document.getElementById('tr-free'); if(trFree && !isNaN(free)) trFree.value = free;
+
+  // counts + feedback
+  const cnt = {GK:0,DEF:0,MID:0,FWD:0}; resolved.forEach(p=>cnt[p.pos]++);
+  const cc = {}; resolved.forEach(p=>cc[p.team]=(cc[p.team]||0)+1);
+  const spend = resolved.reduce((a,p)=>a+p.price,0);
+  const overCap = Object.entries(cc).filter(([,v])=>v>STATE.maxPerCountry);
+  const warn = [];
+  if(resolved.length !== 15) warn.push(`Loaded ${resolved.length}/15 players`);
+  if(cnt.GK!==2||cnt.DEF!==5||cnt.MID!==5||cnt.FWD!==3) warn.push(`Formation ${cnt.GK}-${cnt.DEF}-${cnt.MID}-${cnt.FWD} (need 2-5-5-3)`);
+  if(overCap.length) warn.push(`Over country cap: ${overCap.map(([k,v])=>k+'='+v).join(', ')}`);
+  const el = document.getElementById('import-squad-result');
+  el.innerHTML =
+    `<div class="rec ${warn.length||unmatched.length||ambiguous.length?'warn':''}"><div>`+
+    `<div class="title">Loaded ${resolved.length} players · $${spend.toFixed(1)}m spend · $${(STATE.budget-spend).toFixed(1)}m bank</div>`+
+    (warn.length?`<div class="sub" style="color:var(--warn)">${warn.join(' · ')}</div>`:`<div class="sub good">Valid squad — transfer & chip panels below now reflect your team.</div>`)+
+    (unmatched.length?`<div class="sub">Not found: <b>${unmatched.join(', ')}</b> — check spelling.</div>`:'')+
+    (ambiguous.length?ambiguous.map(a=>`<div class="sub">"${a.tok}" is ambiguous: ${a.cands.map(c=>c.name+' ('+c.team+')').join(', ')} — use the full name.</div>`).join(''):'')+
+    `</div><div></div></div>`;
+  refresh();
+  renderAll();
+}
+window.importSquadFromText = importSquadFromText;
 
 function renderChipStrategyPanel(){
   const el = document.getElementById('chip-strategy-panel');
@@ -9531,6 +9618,8 @@ document.querySelectorAll('#p-pos-seg button').forEach(b=>{
 });
 document.getElementById('opt-run').onclick = runOptimizer;
 document.getElementById('plan-recompute').onclick = recomputePlan;
+const importBtn = document.getElementById('import-squad-btn');
+if(importBtn) importBtn.onclick = importSquadFromText;
 const rtb = document.getElementById('run-tests-btn');
 if(rtb) rtb.onclick = renderTestResults;
 document.getElementById('hit-calc').onclick = runHitCalc;
