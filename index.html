@@ -8197,11 +8197,12 @@ const MANUAL_NEWS_OVERRIDES = [
     reason: 'Correction (user-flagged): previous override incorrectly assumed CL Final start = France starter. Reality: Doué is CL Young Player of the Year and started PSG\'s CL Final win over Arsenal, BUT for France he competes with Cherki, Barcola, Thuram for ONE attacking spot (Olise + Dembélé are shoo-ins). Rotation tier, not nailed. Closer to ~2/5 starts.' },
 ];
 
-// ASSUMPTION-FREE MODE (user directive, 2026-06-11): injury/rotation truth must come from
-// live data — FIFA ownership refreshed at page load, observed lineups, and the automated
-// backup-tier caps — never from hand-written news interpretations. The override entries are
-// kept below as documentation/research notes only. Flip to true to restore curated mode.
-const MANUAL_OVERRIDES_ENABLED = false;
+// SOURCED NEWS LAYER (re-enabled by user decision, 2026-06-11): multi-source team news —
+// manager/club statements like Barcelona's Yamal minutes plan — is treated as DATA, not
+// assumption. Automated signals (ownership floors, observed lineups) cannot see minutes-cap
+// instructions: Yamal is 43% owned (managers hold him for MD2/3 value) yet club-capped to
+// ~15 minutes on MD1. Every entry below must cite its sources and date.
+const MANUAL_OVERRIDES_ENABLED = true;
 
 function applyManualNewsOverrides(){
   if(!MANUAL_OVERRIDES_ENABLED){
@@ -9055,12 +9056,17 @@ const TEST_SUITE = [
       return TEAMS.ARG.elo >= top[2] ? {pass:true} : {pass:false, msg:`ARG Elo ${TEAMS.ARG.elo} not in top-3`};
     }
   },
-  // ASSUMPTION-FREE MODE: no hand-written news interpretations may reach the model.
-  // (The old "Neuer ≥ Baumann" check asserted a curated override; replaced by its inverse.)
-  { name: 'Assumption-free: zero manual news overrides applied',
+  // Sourced news layer ON: validate it actually reaches the model, and that minutes-cap
+  // news (Yamal's MD1 ramp) overrides the ownership floor that would otherwise mis-rate him.
+  { name: 'Sourced news layer applied (Yamal MD1 ramp beats ownership floor)',
     fn: () => {
-      const tainted = PLAYERS.filter(p => p._newsOverride);
-      return tainted.length === 0 ? {pass:true, msg:'model is purely data-driven'} : {pass:false, msg:`${tainted.length} players carry manual overrides: ${tainted.slice(0,5).map(p=>p.name).join(', ')}`};
+      if(!MANUAL_OVERRIDES_ENABLED) return {pass:true, msg:'news layer disabled'};
+      const y = PLAYERS.find(p=>p.name==='Lamine Yamal' && p.team==='ESP');
+      if(!y) return {pass:true, msg:'Yamal not in pool'};
+      const m1 = (y.mriByMd && y.mriByMd['1'] != null) ? y.mriByMd['1'] : y.mri;
+      return (y._newsOverride && m1 <= 0.30)
+        ? {pass:true, msg:`Yamal MD1 minutes ${m1} (capped by news, not 0.92 ownership floor)`}
+        : {pass:false, msg:`Yamal MD1 minutes ${m1}, override=${!!y._newsOverride} — news ramp not applied`};
     }
   },
   { name: 'Stones not flagged as locked-in starter',
