@@ -881,30 +881,34 @@ const KICKOFFS = {
 };
 function getKickoff(team, md){ return KICKOFFS[team+'_'+md] || null; }
 
-// Auto-detect the live group matchday from the real schedule + clock. Returns the smallest
-// group MD whose LAST kickoff is still in the future (so MD1 stays "current" until its final
-// game kicks off, even when earlier MD1 games are done). status:'upcoming' before the round's
-// first kickoff, 'in_progress' once it has started. null once all group games are played
-// (knockout dates aren't in KICKOFFS — leave the round on manual).
+// Auto-detect matchday state from the real schedule + clock. A round's DEADLINE is its first
+// kickoff; once that passes the squad is locked, so all planning (captaincy, transfers, chips)
+// targets the NEXT open-deadline round. Returns:
+//   .md / .plan = the round to plan for (default STATE.md)
+//   .live       = the round currently in progress (for the live decision desk), or null
+//   .status     = 'upcoming' (before plan round's first kickoff) | 'in_progress' (a round is live)
+// null once the group stage is fully played (knockout dates aren't in KICKOFFS → manual).
 function detectCurrentMd(now){
   const t = (now || new Date()).getTime();
   for(const md of [1,2,3]){
     const times = Object.entries(KICKOFFS).filter(([k])=>k.endsWith('_'+md)).map(([,v])=>Date.parse(v)).filter(n=>!isNaN(n));
     if(!times.length) continue;
     const first = Math.min(...times), last = Math.max(...times);
-    if(t <= last) return { md:String(md), status: t < first ? 'upcoming' : 'in_progress', first, last };
+    if(t < first) return { md:String(md), plan:String(md), live:null, status:'upcoming', first, last };
+    if(t <= last){ const nxt = md < 3 ? String(md+1) : 'R32'; return { md:nxt, plan:nxt, live:String(md), status:'in_progress', first, last }; }
+    // else this round is fully played → advance to the next
   }
   return null;
 }
+function liveMd(){ const d = detectCurrentMd(); return (d && d.live) || STATE.md; }
 function updateMdBanner(){
   const el = document.getElementById('md-autodetect');
   if(!el) return;
   const d = detectCurrentMd();
   if(!d){ el.textContent = ''; return; }
-  const next = d.md==='3' ? 'R32' : String(+d.md+1);
   el.innerHTML = d.status==='in_progress'
-    ? `<span class="warn">● MD${d.md} live</span> <span class="dim">— locked except subs/captain; transfers apply to MD${next}</span>`
-    : `<span class="good">● MD${d.md} upcoming</span> <span class="dim">— deadline at first kickoff</span>`;
+    ? `<span class="warn">● MD${d.live} live</span> <span class="dim">— locked; now planning <b>MD${d.plan}</b></span>`
+    : `<span class="good">● MD${d.plan} upcoming</span> <span class="dim">— deadline at first kickoff</span>`;
 }
 // PRE-COMPUTED slot map — done once at load to keep optimizer hot loops fast.
 // Without this, each kickoffSlot call did O(144) filter+sort, freezing the page when called
@@ -4635,7 +4639,7 @@ function renderActionPlan(){
 async function renderLiveDecision(){
   const el = document.getElementById('live-decision-panel');
   if(!el) return;
-  const md = STATE.md;
+  const md = liveMd();   // live desk tracks the in-progress round, not the planning round
   const squad = STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean);
   if(squad.length === 0){ el.innerHTML = '<div class="dim">Fill your squad to see live recommendations.</div>'; return; }
   const liveData = await fetchLiveState();
