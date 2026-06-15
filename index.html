@@ -5313,8 +5313,9 @@ function renderTransfers(){
     const ev_h = ft1.delta - 3;
     scenarios.push({name:`Hit -3: ${ft1.out.name} → ${ft1.in.name}`, sub:`Take 3pt hit for one transfer (counts as your 2nd this MD).`, ev:horiz + ev_h, ev_delta:ev_h, hit:3, conf:0.55, recommended: ev_h > 1.5});
   }
-  // Wildcard — only meaningful when transfers are limited (not MD1 pre-tournament, not R32 unlimited window)
-  if(STATE.md !== '1' && STATE.md !== 'R32'){
+  // Wildcard — only meaningful when transfers are limited (not MD1 pre-tournament, not R32
+  // unlimited window) and only if it hasn't already been spent.
+  if(STATE.md !== '1' && STATE.md !== 'R32' && !(STATE.chipsUsed || []).includes('Wildcard')){
     const wc = simulateWildcard(squad);
     scenarios.push({name:'Wildcard', sub:`Full rebuild. Best of horizon ${Number(wc.gain ?? 0).toFixed(1)} pts uplift.`, ev:horiz + wc.gain, ev_delta:wc.gain, hit:0, conf:0.5, recommended: wc.gain > 18});
   }
@@ -9264,6 +9265,7 @@ function saveSlot(name){
     viceId: STATE.viceId,
     pins: [...STATE.pins],
     excludes: [...STATE.excludes],
+    chipsUsed: [...(STATE.chipsUsed || [])],
     mriOverrides: getMriOverrides(),
     savedAt: Date.now(),
   };
@@ -9281,6 +9283,7 @@ function loadSlot(name){
     STATE.viceId = (slot.viceId && PLAYER_BY_ID[slot.viceId]) ? slot.viceId : null;
     STATE.pins = new Set((slot.pins || []).filter(id => PLAYER_BY_ID[id] != null));
     STATE.excludes = new Set((slot.excludes || []).filter(id => PLAYER_BY_ID[id] != null));
+    STATE.chipsUsed = slot.chipsUsed || [];
     if(slot.mriOverrides) localStorage.setItem('wctd_mri_overrides', JSON.stringify(slot.mriOverrides));
     applyManualNewsOverrides();
     applyMriOverrides();
@@ -9474,6 +9477,7 @@ function importSquadFromText(){
     (unmatched.length?`<div class="sub">Not found: <b>${unmatched.join(', ')}</b> — check spelling.</div>`:'')+
     (ambiguous.length?ambiguous.map(a=>`<div class="sub">"${a.tok}" is ambiguous: ${a.cands.map(c=>c.name+' ('+c.team+')').join(', ')} — use the full name.</div>`).join(''):'')+
     `</div><div></div></div>`;
+  if(typeof autoSaveCurrent === 'function') autoSaveCurrent();   // persist import (squad + chipsUsed) across reloads
   refresh();
   renderAll();
 }
@@ -9485,18 +9489,29 @@ function renderChipStrategyPanel(){
   const plan = computeOptimalChipPlan(STATE.squad);
   const md = STATE.md;
   const timeline = ['1','2','3','R32','R16','QF','SF','F'];
-  // Map each MD to chip(s) recommended
+  const curIdx = timeline.indexOf(md);
+  const used = STATE.chipsUsed || [];
+  // Map each MD to remaining recommended chip(s)
   const mdChips = {};
   plan.forEach(c => { if(!mdChips[c.primary]) mdChips[c.primary] = []; mdChips[c.primary].push(c); });
+  const usedBadges = used.length
+    ? `<div style="font-size:11.5px;margin-bottom:8px">Chips used: ${used.map(u=>`<span class="pill warn" style="margin-right:4px;text-decoration:line-through">${u}</span>`).join('')}<span class="dim">— excluded from the plan below.</span></div>`
+    : `<div class="dim" style="font-size:11px;margin-bottom:8px">No chips marked used. Import your squad (Transfers tab) and tick spent chips to refine this.</div>`;
 
   el.innerHTML = `
+    ${usedBadges}
     <div class="dim" style="font-size:11.5px;margin-bottom:10px">Optimal chip order assumes R32 free rebuild lets you pivot for knockouts. Update if a major event (injury wave, surprise team advancement) shifts the math.</div>
     <div class="row" style="gap:4px;margin-bottom:12px;font-size:11px">
-      ${timeline.map(t=>{
+      ${timeline.map((t,i)=>{
         const chips = mdChips[t] || [];
+        const isPast = curIdx >= 0 && i < curIdx;
+        const isCurrent = i === curIdx;
         const cls = chips.length ? 'good' : 'dim';
-        return `<div style="flex:1;text-align:center;padding:6px 4px;background:${chips.length?'var(--panel2)':'transparent'};border:1px solid var(--line);border-radius:4px">
-          <div class="${cls}" style="font-weight:600">MD${t}</div>
+        const border = isCurrent ? '2px solid var(--acc)' : '1px solid var(--line)';
+        const bg = isPast ? 'transparent' : (chips.length ? 'var(--panel2)' : 'transparent');
+        const op = isPast ? 'opacity:0.45;' : '';
+        return `<div style="flex:1;text-align:center;padding:6px 4px;background:${bg};border:${border};border-radius:4px;${op}">
+          <div class="${cls}" style="font-weight:600">MD${t}${isCurrent?' •':''}</div>
           <div style="font-size:10px;margin-top:2px">${chips.map(c=>c.chip.split(' ')[0]).join('<br>') || '—'}</div>
         </div>`;
       }).join('')}
