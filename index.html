@@ -4396,6 +4396,7 @@ const STATE = {
   pins: new Set(),
   excludes: new Set(),
   chipsUsed: [],     // chips already spent (excluded from the chip planner)
+  squadSource: 'optimizer',   // 'optimizer' (model suggestion) | 'user' (imported/saved real team)
 };
 
 function refresh(){
@@ -4412,6 +4413,17 @@ function renderDashboard(){
   document.getElementById('rec-md').textContent = STATE.md;
   const recList = document.getElementById('rec-list');
   recList.innerHTML = '';
+  // If the squad on screen is the model's suggestion (not the user's real team), say so loudly —
+  // every recommendation below is otherwise about a team they don't own.
+  const srcBanner = (STATE.squad.length >= 11 && STATE.squadSource !== 'user')
+    ? `<div class="rec warn" style="border-left:3px solid var(--warn)">
+        <div>
+          <div class="title">⚠ This is the model's suggested XV — not your team</div>
+          <div class="sub">To get advice on your actual squad, go to <a onclick="switchTab('transfers')"><b>Transfers → Import your squad</b></a>, paste your 15 players, set bank/free-transfers, tick any chips you've used, and hit Import. Your team then sticks across reloads.</div>
+        </div>
+        <div class="ev">—</div>
+      </div>`
+    : '';
   if(STATE.squad.length === 0){
     recList.innerHTML = `<div class="rec warn">
       <div>
@@ -4432,7 +4444,7 @@ function renderDashboard(){
     const cap = projXi[0];
     const safeCap = projXi.find(p=>p.own>=0.20) || cap;
     const aggCap = cap ? (projXi.find(p=>p.own<0.10 && p.xptsMD > cap.xptsMD*0.7) || cap) : null;
-    recList.innerHTML = `
+    recList.innerHTML = srcBanner + `
       <div class="rec">
         <div>
           <div class="title">Captain: ${cap?.name || '—'} <span class="badge-group">${cap?.team || ''}</span></div>
@@ -5638,6 +5650,7 @@ function runOptimizer(){
 function applyOptimized(){
   if(!window._lastOpt) return alert('Run optimizer first');
   STATE.squad = window._lastOpt.squad.map(p=>p.id);
+  STATE.squadSource = 'optimizer';
   refresh();
   switchTab('dashboard');
 }
@@ -9297,6 +9310,7 @@ function saveSlot(name){
     pins: [...STATE.pins],
     excludes: [...STATE.excludes],
     chipsUsed: [...(STATE.chipsUsed || [])],
+    squadSource: STATE.squadSource || 'user',
     mriOverrides: getMriOverrides(),
     savedAt: Date.now(),
   };
@@ -9315,6 +9329,7 @@ function loadSlot(name){
     STATE.pins = new Set((slot.pins || []).filter(id => PLAYER_BY_ID[id] != null));
     STATE.excludes = new Set((slot.excludes || []).filter(id => PLAYER_BY_ID[id] != null));
     STATE.chipsUsed = slot.chipsUsed || [];
+    STATE.squadSource = slot.squadSource || 'user';   // a saved slot is the user's team unless tagged otherwise
     if(slot.mriOverrides) localStorage.setItem('wctd_mri_overrides', JSON.stringify(slot.mriOverrides));
     applyManualNewsOverrides();
     applyMriOverrides();
@@ -9483,6 +9498,7 @@ function importSquadFromText(){
   }
   // Load whatever resolved (cap 15) so panels light up even if a couple need fixing.
   STATE.squad = resolved.slice(0,15).map(p=>p.id);
+  STATE.squadSource = 'user';
   STATE.budget = STATE.md && !/^[1-3]$/.test(STATE.md) ? 105 : 100;   // +$5m at knockouts
   const bank = parseFloat(document.getElementById('import-bank').value);
   const free = parseInt(document.getElementById('import-free').value, 10);
@@ -9871,9 +9887,17 @@ async function bootstrap(){
   if(det) STATE.md = det.md;
   const cm = document.getElementById('conn-md'); if(cm) cm.value = STATE.md;
   updateMdBanner();
-  refresh();
+  // Run the optimizer so the Optimizer tab is populated, but ONLY adopt its XV as the active
+  // squad for a first-time visitor with no team of their own. If the user has imported/saved a
+  // squad (restored above), that is THEIR team — never overwrite it with the optimizer's.
   runOptimizer();
-  applyOptimized();
+  if(STATE.squad.length >= 11){
+    refresh();
+    switchTab('dashboard');
+  } else {
+    applyOptimized();   // fresh visitor: show the optimizer suggestion as a starting point
+  }
+  refresh();
   // capture monitor baseline if first visit, then after refresh save the new baseline for next time
   setTimeout(()=>captureMonitorSnapshot(), 2000);
 }
