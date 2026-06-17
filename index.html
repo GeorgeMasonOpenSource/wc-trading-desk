@@ -3973,24 +3973,30 @@ function _bestCaptainId(squadIds, md){
 }
 
 function _findBestSingleTransfer(squadIds, mdsRemaining, bank, capPerCountry){
-  // Try swapping each squad player for any non-squad player of same position. Score = sum xPts over remaining MDs.
+  // Rank swaps by the change in STARTING-XI points (auto-sub + captain aware) summed over the
+  // remaining MDs — NOT a player's raw projection. A swap of a benched player that doesn't change
+  // your XI scores ~0, so the engine no longer fixates on bench-for-bench upgrades and misses real
+  // XI improvements. To stay fast, each out-player is matched only against the top few affordable
+  // same-position candidates by raw projection, then those are scored on true XI impact.
   const cc = _squadCountries(squadIds);
-  let best = null;
+  const baseXi = mdsRemaining.reduce((a,m)=>a + _gwScore(squadIds, m), 0);
   const candidatesByPos = {GK:[],DEF:[],MID:[],FWD:[]};
   PLAYERS.forEach(p=>{ if(!squadIds.includes(p.id)) candidatesByPos[p.pos].push(p); });
+  let best = null;
   for(const outId of squadIds){
     const out = PLAYER_BY_ID[outId];
-    const outScore = mdsRemaining.reduce((a,m)=>a + (projectXPts(out, m)?.xpts || 0), 0);
     const ccMinusOut = {...cc}; ccMinusOut[out.team]--; if(ccMinusOut[out.team]===0) delete ccMinusOut[out.team];
-    // Search candidates within budget + cap
     const newBank = bank + out.price;
-    for(const cand of candidatesByPos[out.pos]){
-      if(cand.price > newBank + 0.001) continue;
-      if((ccMinusOut[cand.team]||0) >= capPerCountry) continue;
-      const candScore = mdsRemaining.reduce((a,m)=>a + (projectXPts(cand, m)?.xpts || 0), 0);
-      const delta = candScore - outScore;
-      if(!best || delta > best.delta){
-        best = {outId, inId:cand.id, delta, netCost: cand.price - out.price, newBank: newBank - cand.price};
+    // shortlist: affordable, cap-legal, same position, top 8 by raw remaining-MD projection
+    const shortlist = candidatesByPos[out.pos]
+      .filter(c => c.price <= newBank + 0.001 && (ccMinusOut[c.team]||0) < capPerCountry)
+      .map(c => ({c, raw: mdsRemaining.reduce((a,m)=>a + (projectXPts(c, m)?.xpts || 0), 0)}))
+      .sort((a,b)=>b.raw - a.raw).slice(0, 8);
+    for(const {c} of shortlist){
+      const sq = squadIds.map(x => x===outId ? c.id : x);
+      const xiGain = mdsRemaining.reduce((a,m)=>a + _gwScore(sq, m), 0) - baseXi;
+      if(!best || xiGain > best.delta){
+        best = {outId, inId:c.id, delta:xiGain, netCost: c.price - out.price, newBank: newBank - c.price};
       }
     }
   }
@@ -5392,9 +5398,9 @@ function renderTransfers(){
     const g1 = remaining.reduce((a,m)=>a + _gwScore(sq1, m), 0) - baseXi;
     const o = PLAYER_BY_ID[m1.outId], n = PLAYER_BY_ID[m1.inId];
     ft1 = {o, n, g:g1, net:m1.netCost};
-    scenarios.push({name:`FT1: ${o.name} → ${n.name}`, sub:`${o.team} → ${n.team}. Net $${m1.netCost.toFixed(1)}m · <b>XI gain ${g1>=0?'+':''}${g1.toFixed(1)}</b> over ${remaining.length} MDs.`, ev_delta:g1, hit:0, conf:0.7, eligible: g1 >= FT_BAR});
+    scenarios.push({name:`FT1: ${o.name} → ${n.name}`, sub:`${o.team} → ${n.team}. Net $${m1.netCost.toFixed(1)}m · <b>XI gain ${g1>=0?'+':''}${g1.toFixed(1)}</b> over ${remaining.length} MDs.`, ev_delta:g1, hit:0, conf:0.7, eligible: g1 > FT_BAR});
     const evh = g1 - 3;
-    scenarios.push({name:`Hit -3: ${o.name} → ${n.name}`, sub:'Take a 3pt hit to make this now (a 2nd transfer this MD).', ev_delta:evh, hit:3, conf:0.55, eligible: evh >= FT_BAR});
+    scenarios.push({name:`Hit -3: ${o.name} → ${n.name}`, sub:'Take a 3pt hit to make this now (a 2nd transfer this MD).', ev_delta:evh, hit:3, conf:0.55, eligible: evh > FT_BAR});
   }
   // FT2 — best two transfers (only meaningful if it beats FT1)
   if(m1 && sq1){
@@ -5403,7 +5409,7 @@ function renderTransfers(){
       const sq2 = _applyTransfer(sq1, m2);
       const g2 = remaining.reduce((a,m)=>a + _gwScore(sq2, m), 0) - baseXi;
       const o2 = PLAYER_BY_ID[m2.outId], n2 = PLAYER_BY_ID[m2.inId];
-      scenarios.push({name:`2 FT: ${ft1.o.name}→${ft1.n.name}, ${o2.name}→${n2.name}`, sub:`Both free if you have 2 FT · <b>XI gain ${g2>=0?'+':''}${g2.toFixed(1)}</b> over ${remaining.length} MDs.`, ev_delta:g2, hit:0, conf:0.6, eligible: g2 >= FT_BAR + 1.0});
+      scenarios.push({name:`2 FT: ${ft1.o.name}→${ft1.n.name}, ${o2.name}→${n2.name}`, sub:`Both free if you have 2 FT · <b>XI gain ${g2>=0?'+':''}${g2.toFixed(1)}</b> over ${remaining.length} MDs.`, ev_delta:g2, hit:0, conf:0.6, eligible: g2 > FT_BAR + 1.0});
     }
   }
   // Wildcard — XI-realized full-rebuild gain over the remaining MDs (same _gwScore basis as the
@@ -5440,7 +5446,8 @@ function renderTransfers(){
   const isHold = winner.name==='Roll free transfer' || winner.name==='Do nothing';
   let topNote;
   if(isHold){
-    topNote = `<div class="dim" style="font-size:11.5px;margin-bottom:10px">📌 <b>Model says: hold — roll your free transfer.</b> No transfer lifts your starting XI by +${FT_BAR} over the remaining ${remaining.length} MDs${wcGain!=null?`, and a wildcard rebuild (${wcGain>0?'+'+wcGain.toFixed(1):'no'} XI gain) is below the +${WC_BAR} bar`:''}. This matches the Multi-MD plan above. Re-evaluate after each round.</div>`;
+    const bestMove = (ft1 && ft1.g > 0.1) ? ` Best available move: <b>${ft1.o.name} → ${ft1.n.name}</b> (+${ft1.g.toFixed(1)} XI over ${remaining.length} MDs) — below the +${FT_BAR} bar, so optional at best.` : ' No move improves your starting XI.';
+    topNote = `<div class="dim" style="font-size:11.5px;margin-bottom:10px">📌 <b>Model says: hold — roll your free transfer.</b>${bestMove}${wcGain!=null?` Wildcard rebuild (${wcGain>0?'+'+wcGain.toFixed(1):'no'} XI gain) is below the +${WC_BAR} bar.`:''} Consistent with the Multi-MD plan above.</div>`;
   } else {
     topNote = `<div class="dim" style="font-size:11.5px;margin-bottom:10px">📌 <b>Model recommends ${winner.name}</b> — +${winner.ev_delta.toFixed(1)} XI pts over ${remaining.length} MDs (risk-adjusted +${winner.adjEV.toFixed(2)} at ${(winner.conf*100).toFixed(0)}% confidence).</div>`;
   }
