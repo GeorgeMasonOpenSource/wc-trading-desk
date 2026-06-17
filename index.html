@@ -351,6 +351,14 @@
       <button class="primary" id="import-squad-btn">Import squad</button>
     </div>
     <div id="import-squad-result" style="margin-top:8px"></div>
+    <hr style="border-color:var(--line);margin:12px 0 10px">
+    <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <b style="font-size:12px">My Team baseline:</b>
+      <button id="myteam-save" title="Snapshot the current squad as your saved team">💾 Save as my team</button>
+      <button id="myteam-reset" title="Discard planning changes and revert to your saved team">↺ Reset to saved</button>
+      <span id="myteam-status" class="dim mono" style="font-size:11px"></span>
+    </div>
+    <div class="dim" style="font-size:11px;margin-top:6px">Save your real squad once. Then plan week-by-week — try transfers, step matchdays — and your tweaks are a <b>working copy</b>. <b>Reset</b> reverts to the saved team; <b>Save</b> commits a transfer you've actually made.</div>
   </div>
   <div style="height:12px"></div>
   <div class="panel">
@@ -5334,6 +5342,8 @@ function recomputePlan(){
 window.recomputePlan = recomputePlan;
 
 function renderTransfers(){
+  if(typeof prefillImportBox === 'function') prefillImportBox();
+  if(typeof renderMyTeamBar === 'function') renderMyTeamBar();
   renderPlan();
   document.getElementById('tr-md').textContent = STATE.md;
   const hLbl = document.getElementById('tr-horizon-label');
@@ -9604,10 +9614,87 @@ function importSquadFromText(){
     (ambiguous.length?ambiguous.map(a=>`<div class="sub">"${a.tok}" is ambiguous: ${a.cands.map(c=>c.name+' ('+c.team+')').join(', ')} — use the full name.</div>`).join(''):'')+
     `</div><div></div></div>`;
   if(typeof autoSaveCurrent === 'function') autoSaveCurrent();   // persist import (squad + chipsUsed) across reloads
+  if(resolved.length === 15 && typeof saveMyTeam === 'function') saveMyTeam();   // importing defines your baseline
+  // Persist the raw import form so the box auto-fills next time — no retyping.
+  try {
+    localStorage.setItem('wctd_import', JSON.stringify({
+      text, bank: document.getElementById('import-bank').value,
+      free: document.getElementById('import-free').value,
+      chips: STATE.chipsUsed || []
+    }));
+  } catch {}
   refresh();
   renderAll();
 }
+
+// Auto-fill the import form from the last import (or, failing that, from the currently loaded
+// user squad) so the user never has to retype their team. Never clobbers in-progress typing.
+function prefillImportBox(){
+  const ta = document.getElementById('import-squad-text');
+  if(!ta || ta.value.trim()) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('wctd_import') || 'null'); } catch {}
+  let text = saved && saved.text;
+  if(!text && STATE.squadSource === 'user' && STATE.squad.length){
+    text = STATE.squad.map(id=>PLAYER_BY_ID[id]?.name).filter(Boolean).join('\n');
+  }
+  if(!text) return;
+  ta.value = text;
+  const bk = document.getElementById('import-bank'); if(bk && saved && saved.bank != null) bk.value = saved.bank;
+  const fr = document.getElementById('import-free'); if(fr && saved && saved.free != null) fr.value = saved.free;
+  const chips = (saved && saved.chips) || STATE.chipsUsed || [];
+  document.querySelectorAll('.import-chip-used').forEach(cb=>{ cb.checked = chips.includes(cb.value); });
+  const res = document.getElementById('import-squad-result');
+  if(res && !res.innerHTML.trim()){
+    res.innerHTML = `<div class="dim" style="font-size:11px">↑ Pre-filled from your saved team — edit and re-import only if your squad changed${STATE.squadSource==='user'?' (it is already loaded into the panels below)':''}.</div>`;
+  }
+}
 window.importSquadFromText = importSquadFromText;
+
+// ---------- "MY TEAM" BASELINE (save / plan / reset) ----------
+// The baseline is your committed real squad. Planning tweaks (transfers, MD stepping) live on a
+// working copy in STATE; Reset reverts to the baseline, Save overwrites it with the current squad.
+function _readMyTeam(){ try { return JSON.parse(localStorage.getItem('wctd_myteam') || 'null'); } catch { return null; } }
+function saveMyTeam(){
+  if(STATE.squad.length < 1){ alert('Load a squad first.'); return; }
+  const snap = {
+    squad: [...STATE.squad], captainId: STATE.captainId, viceId: STATE.viceId,
+    chipsUsed: [...(STATE.chipsUsed||[])],
+    bank: document.getElementById('import-bank')?.value, free: document.getElementById('import-free')?.value,
+    savedAt: Date.now()
+  };
+  try { localStorage.setItem('wctd_myteam', JSON.stringify(snap)); } catch {}
+  renderMyTeamBar();
+}
+function resetToMyTeam(){
+  const base = _readMyTeam();
+  if(!base){ alert('No saved team yet — click "Save as my team" first.'); return; }
+  STATE.squad = (base.squad||[]).filter(id => PLAYER_BY_ID[id]);
+  STATE.captainId = (base.captainId && PLAYER_BY_ID[base.captainId]) ? base.captainId : null;
+  STATE.viceId = (base.viceId && PLAYER_BY_ID[base.viceId]) ? base.viceId : null;
+  STATE.chipsUsed = base.chipsUsed || [];
+  STATE.squadSource = 'user';
+  const bk=document.getElementById('import-bank'); if(bk && base.bank!=null) bk.value=base.bank;
+  const fr=document.getElementById('import-free'); if(fr && base.free!=null) fr.value=base.free;
+  if(typeof autoSaveCurrent === 'function') autoSaveCurrent();
+  refresh(); renderAll();
+}
+function myTeamDiff(){
+  const base = _readMyTeam(); if(!base) return null;
+  const baseSet = new Set(base.squad||[]);
+  const changed = STATE.squad.filter(id=>!baseSet.has(id)).length;
+  return {changed, base};
+}
+function renderMyTeamBar(){
+  const el = document.getElementById('myteam-status'); if(!el) return;
+  const d = myTeamDiff();
+  if(!d){ el.innerHTML = '<span class="warn">No saved team yet — Save to set your baseline.</span>'; return; }
+  const when = new Date(d.base.savedAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  el.innerHTML = d.changed === 0
+    ? `<span class="good">✓ matches saved team</span> <span class="dim">(saved ${when})</span>`
+    : `<span class="warn">⚠ ${d.changed} change${d.changed>1?'s':''} vs saved team</span> <span class="dim">— Reset to revert, or Save to commit (saved ${when})</span>`;
+}
+window.saveMyTeam = saveMyTeam; window.resetToMyTeam = resetToMyTeam;
 
 function renderChipStrategyPanel(){
   const el = document.getElementById('chip-strategy-panel');
@@ -9767,6 +9854,8 @@ document.getElementById('opt-run').onclick = runOptimizer;
 document.getElementById('plan-recompute').onclick = recomputePlan;
 const importBtn = document.getElementById('import-squad-btn');
 if(importBtn) importBtn.onclick = importSquadFromText;
+const mtSave = document.getElementById('myteam-save'); if(mtSave) mtSave.onclick = saveMyTeam;
+const mtReset = document.getElementById('myteam-reset'); if(mtReset) mtReset.onclick = resetToMyTeam;
 const rtb = document.getElementById('run-tests-btn');
 if(rtb) rtb.onclick = renderTestResults;
 document.getElementById('hit-calc').onclick = runHitCalc;
