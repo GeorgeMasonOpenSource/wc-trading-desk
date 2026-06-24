@@ -255,7 +255,13 @@ async function main(){
   // SANITY GATE — never patch with thin data; the baked snapshot stays in place instead.
   const nXG = Object.keys(XG).length, nMKT = Object.keys(MKT).length;
   console.log(`[refresh-odds] coverage: ${nXG} teams with devigged moneyline, ${nMKT} teams with props`);
-  if(nXG < 16) throw new Error(`only ${nXG} teams with moneyline data (need ≥16) — refusing to patch`);
+  if(nXG < 16){
+    // Expected once the group stage ends: finished games drop their odds and knockout games
+    // fall outside the date window (the model uses Elo for knockouts, not bookmaker odds).
+    // Exit cleanly so the scheduled job stays green instead of alarming — keep the last snapshot.
+    console.log(`[refresh-odds] only ${nXG} teams with fresh moneyline (need ≥16) — likely between matchdays or into the knockouts. Keeping the last good snapshot; nothing to update. (not a failure)`);
+    return;
+  }
 
   const today = new Date().toISOString().slice(0,10);
   const ser = obj => {
