@@ -4849,8 +4849,14 @@ function renderPivotStrategy(){
     return {...p, _kickoff:t, _slot:slot, xptsMD:projectXPts(p,md)?.xpts || 0};
   });
   withKickoff.forEach(p => slots[p._slot].push(p));
-  // Sort each slot by xpts desc
-  Object.values(slots).forEach(arr => arr.sort((a,b)=>b.xptsMD - a.xptsMD));
+  // Sort each tier CHRONOLOGICALLY by actual kickoff time (earliest first), tie-break by xPts.
+  // (Was sorting by xPts, which made players within a tier appear out of kickoff order — e.g. a
+  // Saturday player listed after Sunday ones.)
+  Object.values(slots).forEach(arr => arr.sort((a,b)=>{
+    const ka=a._kickoff||'￿', kb=b._kickoff||'￿';
+    if(ka!==kb) return ka<kb?-1:1;
+    return b.xptsMD - a.xptsMD;
+  }));
   // Compute captain pivot recommendation: best captain-eligible (price >= 9, MID/FWD) by xpts among LATER slots
   const capEligible = withKickoff.filter(p => (p.pos==='MID'||p.pos==='FWD') && p.price >= 9 && p.xptsMD >= 3);
   capEligible.sort((a,b)=>{
