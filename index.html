@@ -157,6 +157,15 @@
   details{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 15px;margin-bottom:9px}
   details summary{cursor:pointer;font-weight:600;color:var(--ink2)}
   details[open] summary{color:var(--ink);margin-bottom:6px}
+  /* match-day tool accordions on the Decision page */
+  .section-label{font-size:12px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink3);margin:0 0 10px 2px}
+  details.tool{background:linear-gradient(180deg,rgba(255,255,255,.02),transparent 100px),var(--panel);
+    border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow-sm)}
+  details.tool>summary{cursor:pointer;font-size:15.5px;font-weight:700;color:var(--ink);list-style:none;display:flex;align-items:center;gap:9px}
+  details.tool>summary::-webkit-details-marker{display:none}
+  details.tool>summary::before{content:"▸";color:var(--acc);font-size:13px;transition:transform .15s ease;display:inline-block}
+  details.tool[open]>summary::before{transform:rotate(90deg)}
+  details.tool[open]>summary{margin-bottom:4px}
 
   .badge-group{display:inline-block;background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;border-radius:6px;font-family:var(--mono);font-size:10.5px;color:var(--ink2)}
 
@@ -253,48 +262,53 @@
       <div class="pitch" id="pitch"></div>
     </div>
   </div>
-  <div style="height:12px"></div>
-  <div style="height:12px"></div>
-  <div class="panel">
-    <h2>🔴 Live Decision Desk — Mid-MD Sub Advisor</h2>
-    <div class="row" style="gap:6px;margin-bottom:8px;align-items:center">
+  <div style="height:18px"></div>
+  <div class="section-label">Match-day tools</div>
+
+  <details class="tool" open>
+    <summary>🔴 Live Decision Desk — mid-MD sub advisor</summary>
+    <div class="row" style="gap:8px;margin:12px 0 8px;align-items:center">
       <button id="live-refresh-btn" class="primary">⟳ Refresh live state</button>
-      <span class="dim" style="font-size:11px" id="live-status">click refresh to pull ESPN scoreboard for current MD</span>
+      <span class="dim" style="font-size:11.5px" id="live-status">click refresh to pull ESPN scoreboard for current MD</span>
     </div>
     <div id="live-decision-panel"></div>
-  </div>
-  <div style="height:12px"></div>
-  <div class="panel">
-    <h2>⏱ Pivot Strategy — Kickoff Timing · <span id="pivot-md">MD1</span>
-      <span style="margin-left:10px;font-size:12px;font-weight:400;white-space:nowrap">
-        <button onclick="stepMd(-1)" title="Previous gameweek" style="padding:2px 8px">‹ prev</button>
-        <button onclick="stepMd(1)" title="Next gameweek" style="padding:2px 8px">next ›</button>
+  </details>
+
+  <details class="tool">
+    <summary>⏱ Pivot Strategy — kickoff timing · <span id="pivot-md">MD1</span>
+      <span style="margin-left:10px;font-size:12px;font-weight:400">
+        <button onclick="event.stopPropagation();stepMd(-1)" title="Previous gameweek" style="padding:2px 8px">‹ prev</button>
+        <button onclick="event.stopPropagation();stepMd(1)" title="Next gameweek" style="padding:2px 8px">next ›</button>
       </span>
-    </h2>
-    <div class="dim" style="font-size:12px;margin-bottom:8px">FIFA WC Fantasy allows mid-matchday XI ↔ bench swaps + captain moves to players who haven't played yet. <b>You don't have to start your best XI</b> — you can bench a premium (e.g. Kane) if he plays LATE, observe early-MD games, then sub him in and even move the armband to him retroactively if your starting captain blanks. Players who kick off LATER carry maximum optionality.</div>
+    </summary>
+    <div class="dim" style="font-size:12px;margin:12px 0 8px">FIFA WC Fantasy allows mid-matchday XI ↔ bench swaps + captain moves to players who haven't played yet. <b>You don't have to start your best XI</b> — you can bench a premium (e.g. Kane) if he plays LATE, observe early-MD games, then sub him in and even move the armband to him retroactively if your starting captain blanks. Players who kick off LATER carry maximum optionality.</div>
     <div id="pivot-strategy-panel"></div>
-  </div>
-  <div style="height:12px"></div>
-  <div class="panel">
-    <h2>📋 Match Day Action Plan — Chronological</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:8px">Your players' fixtures sorted by kickoff time. At each fixture, your default action is "let it play out" — but if an XI player blanks, swap in the next available pivotable bench player. Lock decisions made before each kickoff.</div>
+  </details>
+
+  <details class="tool">
+    <summary>📋 Match Day Action Plan — chronological</summary>
+    <div class="dim" style="font-size:12px;margin:12px 0 8px">Your players' fixtures sorted by kickoff time. At each fixture, your default action is "let it play out" — but if an XI player blanks, swap in the next available pivotable bench player. Lock decisions made before each kickoff.</div>
     <div id="action-plan-panel"></div>
-  </div>
-  <div style="height:12px"></div>
-  <div class="panel">
-    <h2>🎯 Optimal Chip Strategy</h2>
-    <div id="chip-strategy-panel"></div>
-  </div>
-  <div style="height:12px"></div>
-  <div class="panel" style="margin-bottom:12px">
-    <h2>💾 Save / Load Team Slots</h2>
-    <div id="save-slots-list"></div>
-  </div>
-  <div class="split3">
-    <div class="panel"><h2>Safe Captain</h2><div id="cap-safe"></div></div>
-    <div class="panel"><h2>Aggressive Captain</h2><div id="cap-agg"></div></div>
-    <div class="panel"><h2>Differential Captain</h2><div id="cap-diff"></div></div>
-  </div>
+  </details>
+
+  <details class="tool">
+    <summary>🎯 Optimal Chip Strategy</summary>
+    <div style="margin-top:12px" id="chip-strategy-panel"></div>
+  </details>
+
+  <details class="tool">
+    <summary>🎖 Captain options — safe · aggressive · differential</summary>
+    <div class="split3" style="margin-top:12px">
+      <div class="panel"><h3>Safe</h3><div id="cap-safe"></div></div>
+      <div class="panel"><h3>Aggressive</h3><div id="cap-agg"></div></div>
+      <div class="panel"><h3>Differential</h3><div id="cap-diff"></div></div>
+    </div>
+  </details>
+
+  <details class="tool">
+    <summary>💾 Save / Load Team Slots</summary>
+    <div style="margin-top:12px" id="save-slots-list"></div>
+  </details>
   <div style="height:12px"></div>
   <div class="split3">
     <div class="panel">
@@ -3932,7 +3946,7 @@ function _remainingHorizon(){
 function _horizonLabel(){
   const n = _remainingHorizon();
   if(n === 8) return 'full tournament';
-  if(n >= 6) return `MD${STATE.md}→F (${n} MDs)`;
+  if(n >= 6) return `${MD_LABEL(STATE.md)}→F (${n} MDs)`;
   return `${n} MDs remaining`;
 }
 window._remainingHorizon = _remainingHorizon;
@@ -4659,7 +4673,7 @@ function renderDashboard(){
   tiles.innerHTML = `
     <div class="tile" title="Your XI's projected xPts for ${MD_LABEL(md)}. Strict mode: only bookmaker-direct CS/xG + observed-data minutes + curated player stats. Heuristic axes (scout EV, non-curated tk/cc/sot) are zeroed."><div class="lbl">XI xPts · ${MD_LABEL(md)}</div><div class="v">${userXImd.toFixed(1)}</div><div class="delta ${xiDeltaCls}">${xiDeltaStr} vs $${STATE.budget}m optimum</div></div>
     <div class="tile" title="Realistic ceiling — what the budget-constrained optimal squad's XI would score on ${MD_LABEL(md)}. Use as your anchor; ±2-3 pts of this means your squad is competitive."><div class="lbl">Benchmark · ${MD_LABEL(md)}</div><div class="v dim">${benchmarkMD.toFixed(1)}</div><div class="delta dim">optimizer's XI ($${STATE.budget}m)</div></div>
-    <div class="tile" title="Sum of all 15 players' projected xPts over the next 3 matchdays counting FORWARD from the current matchday (already-played MDs excluded). Bench at full weight."><div class="lbl">Squad xPts · next 3 MD</div><div class="v">${horiz.toFixed(0)}</div><div class="delta dim">all 15 · forward from MD${STATE.md}</div></div>
+    <div class="tile" title="Sum of all 15 players' projected xPts over the next 3 matchdays counting FORWARD from the current matchday (already-played MDs excluded). Bench at full weight."><div class="lbl">Squad xPts · next 3 MD</div><div class="v">${horiz.toFixed(0)}</div><div class="delta dim">all 15 · forward from ${MD_LABEL(STATE.md)}</div></div>
     <div class="tile" title="Sum of all 15 players' projected xPts across full tournament path (h=8), survival-weighted by R32/R16/QF/SF/F advance probabilities. Knockouts use Elo (bookies haven't priced KO yet)."><div class="lbl">Squad xPts · h=8</div><div class="v dim">${(STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean).reduce((a,p)=>a+projectHorizon(p,8).total,0)).toFixed(0)}</div><div class="delta dim">survival-weighted</div></div>
     <div class="tile"><div class="lbl">Spend</div><div class="v">$${spend.toFixed(1)}m</div><div class="delta dim">${(STATE.budget-spend).toFixed(1)}m bank</div></div>
     <div class="tile"><div class="lbl">Squad · ${MD_LABEL(md)}</div><div class="v">${xPtsMD.toFixed(1)}</div><div class="delta dim">${squadPlayers.length}/15 incl bench</div></div>
