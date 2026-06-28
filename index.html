@@ -4306,7 +4306,7 @@ function narratePick(p, md){
         const label = {appearance:'appearance pts', goals:'goal threat', assists:'assists', cs:'clean sheet', tackles:'tackle bonus', chances:'chances created', sot:'shots on target', penWon:'pen-winning', bonus:'attacking bonus', saves:'GK saves', penSave:'pen save EV'}[k] || k;
         return `<b>${v.toFixed(1)}</b> ${label}`;
       }).join(' · ');
-      reasons.push({tag:'breakdown', text:`<b>MD${md} xPts ${r.xpts.toFixed(1)} decomposes as:</b> ${breakdown}.`});
+      reasons.push({tag:'breakdown', text:`<b>${MD_LABEL(md)} xPts ${r.xpts.toFixed(1)} decomposes as:</b> ${breakdown}.`});
     }
   }
 
@@ -4349,7 +4349,7 @@ function narratePick(p, md){
     else if(eloDiff > -80) verdict = 'close matchup';
     else if(eloDiff > -200) verdict = 'underdog';
     else verdict = 'heavy underdog';
-    let fxLine = `<b>MD${md} fixture:</b> ${fx.my.name} vs <b>${fx.opp.name}</b> (Elo ${oppElo}, ${verdict}). Team xG <b class="mono">${fx.teamXG.toFixed(2)}</b>, expected concedes <b class="mono">${fx.teamXGA.toFixed(2)}</b>.`;
+    let fxLine = `<b>${MD_LABEL(md)} fixture:</b> ${fx.my.name} vs <b>${fx.opp.name}</b> (Elo ${oppElo}, ${verdict}). Team xG <b class="mono">${fx.teamXG.toFixed(2)}</b>, expected concedes <b class="mono">${fx.teamXGA.toFixed(2)}</b>.`;
     if((p.pos==='DEF'||p.pos==='GK')) fxLine += ` CS odds <b class="good">${(fx.csProb*100).toFixed(0)}%</b>.`;
     if(p.pos==='FWD'||p.pos==='MID'){
       const expGoalContrib = (fx.teamXG * (p.gs + p.as)).toFixed(2);
@@ -4452,7 +4452,7 @@ function narrateSquad(squadIds, md){
     const delta = c1.x - c2.x;
     const fx1 = _opponentInfo(c1.p, md);
     const fx2 = _opponentInfo(c2.p, md);
-    story.push(`<b>Captain pick: ${c1.p.name}</b> (${c1.x.toFixed(1)} xPts MD${md}) vs ${c2.p.name} (${c2.x.toFixed(1)}). Edge of ${delta.toFixed(1)} pts ≈ ${(delta*2).toFixed(1)} after doubling. Driver: ${fx1?`${c1.p.team} vs ${fx1.opp.name} projects ${fx1.teamXG.toFixed(2)} xG`:'team-strength edge'}${fx2?`, vs ${c2.p.team} vs ${fx2.opp.name} ${fx2.teamXG.toFixed(2)} xG`:''}.`);
+    story.push(`<b>Captain pick: ${c1.p.name}</b> (${c1.x.toFixed(1)} xPts ${MD_LABEL(md)}) vs ${c2.p.name} (${c2.x.toFixed(1)}). Edge of ${delta.toFixed(1)} pts ≈ ${(delta*2).toFixed(1)} after doubling. Driver: ${fx1?`${c1.p.team} vs ${fx1.opp.name} projects ${fx1.teamXG.toFixed(2)} xG`:'team-strength edge'}${fx2?`, vs ${c2.p.team} vs ${fx2.opp.name} ${fx2.teamXG.toFixed(2)} xG`:''}.`);
   }
 
   // What's NOT in the squad (the omission story)
@@ -4492,7 +4492,7 @@ function narrateCaptain(captainId, md, precomputed){
   // Build narrative
   const lines = [];
   const xPtsMD = r.xpts;
-  lines.push(`<b>${p.name}</b> (${t.name}, $${p.price.toFixed(1)}m) — projects <b class="mono good">${xPtsMD.toFixed(1)}</b> xPts on MD${md}, doubled to <b class="mono good">${(xPtsMD*2).toFixed(1)}</b> as captain.`);
+  lines.push(`<b>${p.name}</b> (${t.name}, $${p.price.toFixed(1)}m) — projects <b class="mono good">${xPtsMD.toFixed(1)}</b> xPts on ${MD_LABEL(md)}, doubled to <b class="mono good">${(xPtsMD*2).toFixed(1)}</b> as captain.`);
   if(fx){
     const eloEdge = t.elo - fx.opp.elo;
     const dominance = eloEdge > 200 ? 'expected to dominate' : eloEdge > 80 ? 'clear favorite' : eloEdge > -80 ? 'close matchup' : 'underdog';
@@ -4508,7 +4508,7 @@ function narrateCaptain(captainId, md, precomputed){
   const rank = allCap.findIndex(c=>c.q.id===p.id) + 1;
   const c2 = allCap[1];
   const delta = xPtsMD - (c2?.x || 0);
-  lines.push(`<b>Ranked #${rank} of 1,454 players</b> in MD${md} xPts. Next-best captain: <b>${c2?.q.name}</b> (${(c2?.x||0).toFixed(1)} xPts). Edge of <b class="mono">${delta.toFixed(1)}</b> = <b class="good">+${(delta*2).toFixed(1)}</b> captain EV swing.`);
+  lines.push(`<b>Ranked #${rank} of 1,454 players</b> in ${MD_LABEL(md)} xPts. Next-best captain: <b>${c2?.q.name}</b> (${(c2?.x||0).toFixed(1)} xPts). Edge of <b class="mono">${delta.toFixed(1)}</b> = <b class="good">+${(delta*2).toFixed(1)}</b> captain EV swing.`);
   return lines.join('<br>');
 }
 
@@ -4612,7 +4612,7 @@ function renderDashboard(){
       <div class="rec">
         <div>
           <div class="title">Transfer recommendation</div>
-          <div class="sub">No action clears 1.5 EV hit threshold for MD${md}. Roll free transfer → ${STATE.squad.length<15?'(after squad is filled)':'next MD'}.</div>
+          <div class="sub">No action clears 1.5 EV hit threshold for ${MD_LABEL(md)}. Roll free transfer → ${STATE.squad.length<15?'(after squad is filled)':'next MD'}.</div>
         </div>
         <div class="ev">roll<span class="conf">below threshold</span></div>
       </div>
@@ -4657,8 +4657,8 @@ function renderDashboard(){
   const xiDeltaStr = xiDelta >= 0 ? `+${xiDelta.toFixed(1)}` : xiDelta.toFixed(1);
 
   tiles.innerHTML = `
-    <div class="tile" title="Your XI's projected xPts for MD${md}. Strict mode: only bookmaker-direct CS/xG + observed-data minutes + curated player stats. Heuristic axes (scout EV, non-curated tk/cc/sot) are zeroed."><div class="lbl">XI xPts · ${MD_LABEL(md)}</div><div class="v">${userXImd.toFixed(1)}</div><div class="delta ${xiDeltaCls}">${xiDeltaStr} vs $${STATE.budget}m optimum</div></div>
-    <div class="tile" title="Realistic ceiling — what the budget-constrained optimal squad's XI would score on MD${md}. Use as your anchor; ±2-3 pts of this means your squad is competitive."><div class="lbl">Benchmark · ${MD_LABEL(md)}</div><div class="v dim">${benchmarkMD.toFixed(1)}</div><div class="delta dim">optimizer's XI ($${STATE.budget}m)</div></div>
+    <div class="tile" title="Your XI's projected xPts for ${MD_LABEL(md)}. Strict mode: only bookmaker-direct CS/xG + observed-data minutes + curated player stats. Heuristic axes (scout EV, non-curated tk/cc/sot) are zeroed."><div class="lbl">XI xPts · ${MD_LABEL(md)}</div><div class="v">${userXImd.toFixed(1)}</div><div class="delta ${xiDeltaCls}">${xiDeltaStr} vs $${STATE.budget}m optimum</div></div>
+    <div class="tile" title="Realistic ceiling — what the budget-constrained optimal squad's XI would score on ${MD_LABEL(md)}. Use as your anchor; ±2-3 pts of this means your squad is competitive."><div class="lbl">Benchmark · ${MD_LABEL(md)}</div><div class="v dim">${benchmarkMD.toFixed(1)}</div><div class="delta dim">optimizer's XI ($${STATE.budget}m)</div></div>
     <div class="tile" title="Sum of all 15 players' projected xPts over the next 3 matchdays counting FORWARD from the current matchday (already-played MDs excluded). Bench at full weight."><div class="lbl">Squad xPts · next 3 MD</div><div class="v">${horiz.toFixed(0)}</div><div class="delta dim">all 15 · forward from MD${STATE.md}</div></div>
     <div class="tile" title="Sum of all 15 players' projected xPts across full tournament path (h=8), survival-weighted by R32/R16/QF/SF/F advance probabilities. Knockouts use Elo (bookies haven't priced KO yet)."><div class="lbl">Squad xPts · h=8</div><div class="v dim">${(STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean).reduce((a,p)=>a+projectHorizon(p,8).total,0)).toFixed(0)}</div><div class="delta dim">survival-weighted</div></div>
     <div class="tile"><div class="lbl">Spend</div><div class="v">$${spend.toFixed(1)}m</div><div class="delta dim">${(STATE.budget-spend).toFixed(1)}m bank</div></div>
@@ -4720,7 +4720,7 @@ function renderActionPlan(){
   const captain = STATE.captainId ? withMD.find(p=>p.id===STATE.captainId) : null;
   const vc = STATE.viceId ? withMD.find(p=>p.id===STATE.viceId) : null;
   let html = `<div style="font-size:11.5px;margin-bottom:8px;padding:8px;background:#0a0d12;border-radius:6px">
-    <b>Start with this XI</b> (locked at MD${md} kickoff, swap allowed mid-MD until each fixture starts):
+    <b>Start with this XI</b> (locked at ${MD_LABEL(md)} kickoff, swap allowed mid-MD until each fixture starts):
     <div style="margin-top:4px">
       ${xi.map(p=>`<span class="badge-group" style="background:${teamColor(p.team).primary};color:${teamColor(p.team).alt};margin-right:3px">${p.team}</span>${p.name}${p.id===captain?.id?' Ⓒ':p.id===vc?.id?' Ⓥ':''}`).join(' · ')}
     </div>
@@ -4792,7 +4792,7 @@ async function renderLiveDecision(){
   const status = document.getElementById('live-status');
   if(status){
     if(!liveData) status.innerHTML = '<span class="warn">ESPN fetch failed — try again in a moment.</span>';
-    else status.innerHTML = `last fetched ${new Date(window._liveState.fetchedAt).toLocaleTimeString()} · MD${md} view`;
+    else status.innerHTML = `last fetched ${new Date(window._liveState.fetchedAt).toLocaleTimeString()} · ${MD_LABEL(md)} view`;
   }
   // Tag each squad player with live status + xpts proj
   const withState = squad.map(p=>{
@@ -4814,7 +4814,7 @@ async function renderLiveDecision(){
   const allPre = withState.every(p => p._live.state === 'pre' || p._live.state === 'unknown');
   if(allPre){
     el.innerHTML = `<div class="dim" style="padding:10px;background:#0a0d12;border-radius:6px">
-      <b>Pre-MD${md}.</b> All ${squad.length} of your players' fixtures are still upcoming. The live advisor activates as matches kick off — bookmark this and refresh during MD${md} to see who's locked in, who's still pivotable, and where to deploy bench subs.
+      <b>Pre-${MD_LABEL(md)}.</b> All ${squad.length} of your players' fixtures are still upcoming. The live advisor activates as matches kick off — bookmark this and refresh during ${MD_LABEL(md)} to see who's locked in, who's still pivotable, and where to deploy bench subs.
       <div style="margin-top:6px;font-size:11px">Earliest fixture: ${withState.map(p=>p._live.label).sort()[0] || '—'}</div>
     </div>`;
     return;
@@ -4993,7 +4993,7 @@ function renderPivotStrategy(){
   const slot3Times = slots[3].map(p=>p._kickoff).sort();
   const earliest = slot1Times[0];
   const latest = slot3Times[slot3Times.length-1];
-  let html = `<div class="dim" style="font-size:11.5px;margin-bottom:8px"><b>MD${md} window:</b> ${earliest ? fmtTime(earliest) : '—'} → ${latest ? fmtTime(latest) : '—'} UTC. Players grouped by kickoff tier:</div>`;
+  let html = `<div class="dim" style="font-size:11.5px;margin-bottom:8px"><b>${MD_LABEL(md)} window:</b> ${earliest ? fmtTime(earliest) : '—'} → ${latest ? fmtTime(latest) : '—'} UTC. Players grouped by kickoff tier:</div>`;
   const tierLabels = ['Early — locks in first', 'Middle — partial pivot window', 'Late — maximum pivot optionality'];
   const tierColors = ['var(--warn)', 'var(--ink2)', 'var(--good)'];
   html += '<div class="row" style="gap:10px;flex-wrap:wrap;align-items:stretch">';
@@ -5200,7 +5200,7 @@ function renderPlayers(){
       <th data-col="team">Team</th>
       <th data-col="pos">Pos</th>
       <th data-col="price" class="num">Price</th>
-      <th data-col="xptsMD" class="num">xPts MD${md}</th>
+      <th data-col="xptsMD" class="num">xPts ${MD_LABEL(md)}</th>
       <th data-col="xptsHor" class="num">xPts MD1-3</th>
       <th data-col="value" class="num">Value</th>
       <th data-col="own" class="num">Own%</th>
@@ -5440,12 +5440,12 @@ function renderPlan(){
       chipExtra = `<div class="dim" style="font-size:11px;margin-top:4px">Wildcard rebuild assumed — view squad to see the new 15.</div>`;
     }
     return `<details ${i<3?'open':''}>
-      <summary><b>MD${md}</b> · <span class="pill ${actionCls}">${p.action}</span> · GW score <b class="mono good">${p.gwScore.toFixed(1)}</b> · ${cap?'C: '+cap.name:''} · FT in: ${p.ftCarriedIn}</summary>
+      <summary><b>${MD_LABEL(md)}</b> · <span class="pill ${actionCls}">${p.action}</span> · GW score <b class="mono good">${p.gwScore.toFixed(1)}</b> · ${cap?'C: '+cap.name:''} · FT in: ${p.ftCarriedIn}</summary>
       <div style="margin-top:8px">
         ${movesHtml}
         ${p.hit>0?`<div class="bad" style="font-size:11px;margin-top:4px">-${p.hit} hit cost</div>`:''}
         <div class="row" style="margin-top:6px;font-size:11px">
-          <button onclick="STATE.md='${md}';refresh();switchTab('dashboard')">View squad at MD${md} →</button>
+          <button onclick="STATE.md='${md}';refresh();switchTab('dashboard')">View squad at ${MD_LABEL(md)} →</button>
           <span class="dim mono" style="margin-left:auto">bank $${p.bank.toFixed(1)}m</span>
         </div>
         ${chipExtra}
@@ -5917,12 +5917,12 @@ function openPlayer(id){
       <div style="margin-top:8px">${renderNarrative(narratePick(p, md))}</div>
     </details>
     <div class="tiles">
-      <div class="tile"><div class="lbl">xPts MD${md}</div><div class="v">${r?r.xpts.toFixed(1):'—'}</div></div>
+      <div class="tile"><div class="lbl">xPts ${MD_LABEL(md)}</div><div class="v">${r?r.xpts.toFixed(1):'—'}</div></div>
       <div class="tile"><div class="lbl">xPts full</div><div class="v">${hor.total.toFixed(1)}</div></div>
       <div class="tile"><div class="lbl">Own %</div><div class="v">${(p.own*100).toFixed(0)}%</div></div>
       <div class="tile"><div class="lbl">MRI</div><div class="v">${p.mri.toFixed(2)}</div></div>
     </div>
-    <h3 style="margin-top:14px">Distribution — MD${md}</h3>
+    <h3 style="margin-top:14px">Distribution — ${MD_LABEL(md)}</h3>
     ${(function(){
       const ci = simulateInterval(p, md, 200);
       const max = Math.max(ci.ceiling+1, 12);
@@ -5951,7 +5951,7 @@ function openPlayer(id){
       <span class="pill">Goal-share ${(p.gs*100).toFixed(0)}%</span>
       <span class="pill">Assist-share ${(p.as*100).toFixed(0)}%</span>
     </div>
-    <h3 style="margin-top:14px">xPts breakdown (MD${md})</h3>
+    <h3 style="margin-top:14px">xPts breakdown (${MD_LABEL(md)})</h3>
     ${compBars || '<div class="dim">No fixture for this MD.</div>'}
     <h3 style="margin-top:14px">Group stage fixtures</h3>
     <table style="font-size:11px">
@@ -9017,7 +9017,7 @@ function narrateTransfer(out, inn, md, horizonGain){
   // WHY OUT
   if(outFx){
     const eloDiff = outT.elo - outFx.elo;
-    if(eloDiff < -50) whyOut.push(`MD${md} fixture vs <b>${outFx.name}</b> (Elo ${outFx.elo}) is a tough draw — ${out.team} is the underdog (Elo edge ${eloDiff.toFixed(0)}).`);
+    if(eloDiff < -50) whyOut.push(`${MD_LABEL(md)} fixture vs <b>${outFx.name}</b> (Elo ${outFx.elo}) is a tough draw — ${out.team} is the underdog (Elo edge ${eloDiff.toFixed(0)}).`);
     else if(outR && outR.teamXG < 1.3) whyOut.push(`${out.team}'s xG vs ${outFx.name} is just <b>${outR.teamXG.toFixed(2)}</b> — below the 1.30 baseline for premium scoring environment.`);
   }
   if(out._observed && out._observed.starter_prob < 0.5){
@@ -9033,13 +9033,13 @@ function narrateTransfer(out, inn, md, horizonGain){
   // Generic fallback
   if(whyOut.length === 0 && innR && outR){
     const delta = innR.xpts - outR.xpts;
-    whyOut.push(`Lower MD${md} xPts (${outR.xpts.toFixed(1)}) than ${inn.name} (${innR.xpts.toFixed(1)}) — model sees better value elsewhere.`);
+    whyOut.push(`Lower ${MD_LABEL(md)} xPts (${outR.xpts.toFixed(1)}) than ${inn.name} (${innR.xpts.toFixed(1)}) — model sees better value elsewhere.`);
   }
 
   // WHY IN
   if(innFx){
     const eloDiff = innT.elo - innFx.elo;
-    if(eloDiff > 150) whyIn.push(`MD${md} fixture vs <b>${innFx.name}</b> (Elo ${innFx.elo}) is a soft draw — ${inn.team} expected to dominate (edge +${eloDiff.toFixed(0)}).`);
+    if(eloDiff > 150) whyIn.push(`${MD_LABEL(md)} fixture vs <b>${innFx.name}</b> (Elo ${innFx.elo}) is a soft draw — ${inn.team} expected to dominate (edge +${eloDiff.toFixed(0)}).`);
     else if(innR && innR.teamXG > 1.6) whyIn.push(`${inn.team} projects <b>${innR.teamXG.toFixed(2)} xG</b> vs ${innFx.name} — strong scoring environment.`);
   }
   if(inn._observed && inn._observed.starter_prob >= 0.7){
