@@ -3187,6 +3187,19 @@ let _CAL = Object.assign({}, CALIBRATION);
 try { const _c = JSON.parse(localStorage.getItem('wctd_calibration') || 'null'); if(_c && typeof _c === 'object') _CAL = Object.assign({}, CALIBRATION, _c); } catch {}
 function calFactor(pos){ const v = _CAL[pos]; return (typeof v === 'number' && isFinite(v) && v > 0) ? v : 1; }
 
+// FORM / OUTPUT REALITY CHECK — a premium on a soft fixture still inherits price-tier goal/assist
+// shares, so a player who's PLAYING BUT NOT PRODUCING over-projects (e.g. Saka top on a weak R32
+// fixture despite no returns). p.realizedPPG / p.formApps come from the live feed (stats.roundPoints)
+// at rebuildFromAPI. We pull the projection toward realized output: a bounded, sample-shrunk
+// multiplier vs a ~3.5pt "par game". Identity when there's no tournament history (≥2 appearances).
+function formFactor(p){
+  if(!p || p.formApps == null || p.formApps < 2 || p.realizedPPG == null) return 1;
+  const PAR = 3.5;
+  let f = Math.sqrt(Math.max(0.2, p.realizedPPG) / PAR);          // dampened ratio to par
+  f = 1 + (f - 1) * Math.min(1, p.formApps / 3);                  // shrink toward 1 with few games
+  return Math.max(0.70, Math.min(1.15, f));                      // bounded so it nudges, never dominates
+}
+
 function projectXPts(p, md, raw){
   if(p.pos==='GK') return projectGK(p, md, raw);
   const t = TEAMS[p.team];
@@ -3319,9 +3332,9 @@ function projectXPts(p, md, raw){
   // outcome is ~12-15% below the MEAN. We model the median, since that's what users plan around.
   // Bookmaker team-level data stays intact; only the player-distribution layer is deflated.
   xpts *= 0.87;
-  // CALIBRATION: per-position correction learned from realized results (identity until trained,
-  // and skipped when raw=true so the feedback fit isn't applied to its own training input).
-  const cf = raw ? 1 : calFactor(p.pos);
+  // CALIBRATION (position-level, learned) × FORM (per-player realized output). Both skipped when
+  // raw=true so the calibration fit trains on the unadjusted model, not its own output.
+  const cf = raw ? 1 : (calFactor(p.pos) * formFactor(p));
   xpts *= cf;
   const components = {appearance:appPts*0.87, goals:(gPts+pkPts)*0.87, assists:aPts*0.87, cs:cPts*0.87, concede:conPts, tackles:tkPts*0.87, chances:ccPts*0.87, sot:sotPts*0.87, penWon:penWonPts*0.87, bonus:bonusExp*0.87, scout:scoutEV, cards:cardPen + redPts};
   for(const k in components) components[k] = round1(components[k] * cf);
@@ -3378,7 +3391,7 @@ function projectGK(p, md, raw){
   let xpts = appearance + csPts + concedePen + savePts + gkGoalPts + penSavePts + bonusExp + cardPen + scoutEV;
   // Same variance deflator as outfield
   xpts *= 0.87;
-  const cf = raw ? 1 : calFactor(p.pos);
+  const cf = raw ? 1 : (calFactor(p.pos) * formFactor(p));
   xpts *= cf;
   const components = {appearance:appearance*0.87, goals:gkGoalPts*0.87, assists:0, cs:csPts*0.87, concede:concedePen, bonus:bonusExp*0.87, scout:scoutEV*0.87, cards:cardPen, saves:savePts*0.87, penSave:penSavePts*0.87};
   for(const k in components) components[k] = round1(components[k] * cf);
@@ -4033,6 +4046,11 @@ function getNextFixtures(p, n=3){
   const cur = STATE.md;
   const curIdx = mds.indexOf(cur===parseInt(cur,10).toString() ? parseInt(cur,10) : cur);
   const upcoming = curIdx >= 0 ? mds.slice(curIdx) : mds;
+  // In the knockouts only the CURRENT round's opponent is known (single-elimination) — showing
+  // 3 future "gameweeks" with placeholder "—" opponents + projected points reads poorly. Cap to
+  // the current round once we're past the group stage; keep the 3-fixture strip during groups.
+  const isKO = !/^[1-3]$/.test(String(cur));
+  const limit = isKO ? 1 : n;
   const out = [];
   for(const md of upcoming){
     const r = projectXPts(p, md);
@@ -4040,7 +4058,7 @@ function getNextFixtures(p, n=3){
     const opp = r.fx?.opp;
     const home = r.fx?.home > 0;
     out.push({ md, opp, home, xpts: r.xpts });
-    if(out.length >= n) break;
+    if(out.length >= limit) break;
   }
   return out;
 }
@@ -9578,6 +9596,14 @@ const TEST_SUITE = [
       return {pass:true};
     }
   },
+  { name: 'Form factor: identity w/o data, marks down non-producers, bounded',
+    fn: () => {
+      const id = formFactor({}) === 1 && formFactor({formApps:1, realizedPPG:1}) === 1;
+      const down = formFactor({formApps:3, realizedPPG:2}) < 1 && formFactor({formApps:3, realizedPPG:2}) >= 0.70;
+      const bounded = formFactor({formApps:3, realizedPPG:99}) <= 1.15 && formFactor({formApps:3, realizedPPG:0}) >= 0.70;
+      return (id && down && bounded) ? {pass:true} : {pass:false, msg:`id ${id} down ${down} bounded ${bounded}`};
+    }
+  },
   { name: 'Calibration is identity with no actuals',
     fn: () => { const c = computeCalibration({}); return (c.GK===1 && c.DEF===1 && c.MID===1 && c.FWD===1) ? {pass:true} : {pass:false, msg:`got ${JSON.stringify(c)}`}; }
   },
@@ -10473,10 +10499,15 @@ function rebuildFromAPI(apiPlayers, apiSquads){
     const name = p.knownName || (p.firstName + ' ' + p.lastName);
     const mri = inferMRI(p, bySquad[p.squadId]);
     const [gs, asv] = playerShares(p, posMax);
+    // Realized output from the live feed (stats.roundPoints {round:pts}) → form/output reality check.
+    const rp = p.stats && p.stats.roundPoints;
+    const vals = rp ? Object.values(rp).filter(v=>v!=null) : [];
+    const realizedPPG = vals.length ? vals.reduce((a,b)=>a+(b||0),0)/vals.length : null;
     return {
       id:p.id, name, team:codeById[p.squadId], pos:p.position,
       price:p.price, own:p.percentSelected/100, mri, gs, as:asv,
-      pt: PK_TAKERS[name]||0, fk: FK_TAKERS[name]||0, ck:0, note:''
+      pt: PK_TAKERS[name]||0, fk: FK_TAKERS[name]||0, ck:0, note:'',
+      realizedPPG, formApps: vals.length
     };
   });
   // Atomic swap
