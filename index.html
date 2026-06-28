@@ -4207,6 +4207,29 @@ function _applyTransfer(squadIds, move){
   return squadIds.map(id => id === move.outId ? move.inId : id);
 }
 
+// Best set of transfers for THIS round WITHIN the free allowance — never takes a -3 hit.
+// Greedy: repeatedly take the best single XI-improving swap on the updated squad, up to the round's
+// free-transfer count, stopping once no remaining swap clears a worthwhile threshold (so it won't
+// burn a free transfer on a negligible gain). Returns {unlimited} at R32 (full free rebuild).
+function recommendFreeTransfers(squadIds, md){
+  const alloc = FT_ALLOC[md];
+  if(alloc == null || alloc >= 99) return { unlimited:true, moves:[], alloc };
+  const sq0 = squadIds.map(id=>PLAYER_BY_ID[id]).filter(Boolean);
+  if(sq0.length < 11) return { unlimited:false, alloc, moves:[], totalDelta:0 };
+  const cap = CAP_ALLOC[md] || 3;
+  let squad = squadIds.slice();
+  let bank = STATE.budget - sq0.reduce((a,p)=>a+p.price,0);
+  const moves = [];
+  for(let i=0; i<alloc; i++){
+    const m = _findBestSingleTransfer(squad, [md], bank, cap);
+    if(!m || m.delta <= 0.5) break;                 // no worthwhile free move left → stop (don't waste it)
+    moves.push({ outId:m.outId, inId:m.inId, out:PLAYER_BY_ID[m.outId], in:PLAYER_BY_ID[m.inId], delta:m.delta, netCost:m.netCost });
+    squad = _applyTransfer(squad, m);
+    bank = m.newBank;
+  }
+  return { unlimited:false, alloc, moves, totalDelta: moves.reduce((a,m)=>a+m.delta,0), bank };
+}
+
 function planSeason(startSquadIds, currentBank, opts={}){
   const {startMd = '1', allowHits = true, allowWildcard = true, allowChip = []} = opts;
   const startIdx = MD_SEQUENCE.indexOf(startMd);
@@ -4682,19 +4705,16 @@ function refresh(){
 // Round-aware transfer recommendation for the Recommended-Action list (replaces a hardcoded "roll"
 // stub that wrongly said "roll" even at R32, where transfers are unlimited).
 function _transferRecHtml(md){
-  const sq = STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean);
-  const bank = STATE.budget - sq.reduce((a,p)=>a+p.price,0);
-  const alloc = FT_ALLOC[md];
-  if(alloc == null || alloc >= 99){
+  let rec; try { rec = recommendFreeTransfers(STATE.squad, md); } catch { rec = null; }
+  if(rec && rec.unlimited){
     return `<div class="rec"><div><div class="title">Transfers — free rebuild</div><div class="sub">${MD_LABEL(md)} allows <b>unlimited transfers</b>. Re-optimise the whole squad in <a onclick="switchTab('optimizer')">Squad</a> (country cap ${CAP_ALLOC[md]||3}/team, +$5m budget at knockouts) — no points hit.</div></div><div class="ev good">rebuild</div></div>`;
   }
-  let move = null;
-  try { move = _findBestSingleTransfer(STATE.squad, [md], bank, CAP_ALLOC[md]||3); } catch {}
-  if(move && move.delta > 0.8){
-    const o = PLAYER_BY_ID[move.outId], inp = PLAYER_BY_ID[move.inId];
-    return `<div class="rec"><div><div class="title">Transfer: ${o?.name} → ${inp?.name}</div><div class="sub">+${move.delta.toFixed(1)} xPts at ${MD_LABEL(md)} · net ${move.netCost>=0?'+':''}$${move.netCost.toFixed(1)}m · ${alloc} free transfer${alloc>1?'s':''} this round (free within allowance).</div></div><div class="ev good">+${move.delta.toFixed(1)}</div></div>`;
+  const alloc = rec?.alloc ?? FT_ALLOC[md];
+  if(rec && rec.moves.length){
+    const list = rec.moves.map((m,i)=>`<div style="margin-top:${i?4:6}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} xPts · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
+    return `<div class="rec"><div><div class="title">Transfers — use ${rec.moves.length} of ${alloc} free (no hit)</div><div class="sub">Best moves within your free allowance for ${MD_LABEL(md)} — total <b class="good">+${rec.totalDelta.toFixed(1)} xPts</b>, zero points hit:${list}</div></div><div class="ev good">+${rec.totalDelta.toFixed(1)}</div></div>`;
   }
-  return `<div class="rec"><div><div class="title">Transfers — hold / roll</div><div class="sub">No single move clears +0.8 xPts at ${MD_LABEL(md)}. You have ${alloc} free transfer${alloc>1?'s':''} — save ${alloc>1?'them':'it'}.</div></div><div class="ev">hold</div></div>`;
+  return `<div class="rec"><div><div class="title">Transfers — hold / roll</div><div class="sub">No move clears +0.5 xPts at ${MD_LABEL(md)}. You have ${alloc} free transfer${alloc>1?'s':''} — save ${alloc>1?'them':'it'} (taking a −3 hit isn't worth it here).</div></div><div class="ev">hold</div></div>`;
 }
 // THIS ROUND'S DIRECTIVE — one banner answering "what do I do now": chip call, transfer call
 // (within the round's free allowance), captain, and the deadline. Built from the same engines the
@@ -4719,20 +4739,17 @@ function renderDirective(){
     capCell = `<div class="dcell act"><div class="k">🅒 Captain</div><div class="v">${capP.name}</div><div class="s">${capP.team} · ${cx.toFixed(1)} xPts → <b class="good">${(cx*2).toFixed(1)}</b> doubled</div></div>`;
   }
 
-  // transfers — round's free allowance + best single move at the current round
+  // transfers — best SET of moves within the free allowance (never a -3 hit)
   let tCell;
-  const alloc = FT_ALLOC[md];
-  if(alloc == null || alloc >= 99){
+  let rec = null; try { rec = recommendFreeTransfers(STATE.squad, md); } catch {}
+  if(rec && rec.unlimited){
     tCell = `<div class="dcell act"><div class="k">🔁 Transfers</div><div class="v">Free rebuild</div><div class="s">Unlimited transfers this round — re-optimise in <a onclick="switchTab('optimizer')">Squad</a>, country cap ${CAP_ALLOC[md]||3}/team.</div></div>`;
+  } else if(rec && rec.moves.length){
+    const head = rec.moves.slice(0,2).map(m=>`${m.out?.name}→${m.in?.name}`).join(', ');
+    tCell = `<div class="dcell act"><div class="k">🔁 Transfers · use ${rec.moves.length}/${rec.alloc} free</div><div class="v" style="font-size:14px">${head}${rec.moves.length>2?` +${rec.moves.length-2}`:''}</div><div class="s">+${rec.totalDelta.toFixed(1)} xPts, <b>no hit</b>. Full list in Recommended Action.</div></div>`;
   } else {
-    let move = null;
-    try { move = _findBestSingleTransfer(STATE.squad, [md], bank, CAP_ALLOC[md]||3); } catch {}
-    if(move && move.delta > 0.8){
-      const o = PLAYER_BY_ID[move.outId], inp = PLAYER_BY_ID[move.inId];
-      tCell = `<div class="dcell act"><div class="k">🔁 Transfers · ${alloc} free</div><div class="v">${o?.name} → ${inp?.name}</div><div class="s">+${move.delta.toFixed(1)} xPts this round · net ${move.netCost>=0?'+':''}$${move.netCost.toFixed(1)}m. Free within allowance.</div></div>`;
-    } else {
-      tCell = `<div class="dcell hold"><div class="k">🔁 Transfers · ${alloc} free</div><div class="v">Hold / roll</div><div class="s">No single move clears +0.8 xPts. Save the free transfer.</div></div>`;
-    }
+    const alloc = rec?.alloc ?? FT_ALLOC[md];
+    tCell = `<div class="dcell hold"><div class="k">🔁 Transfers · ${alloc} free</div><div class="v">Hold / roll</div><div class="s">No move clears +0.5 xPts — save your free transfer${alloc>1?'s':''}.</div></div>`;
   }
 
   // chip call for this round
