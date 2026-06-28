@@ -906,15 +906,26 @@ function getKickoff(team, md){ return KICKOFFS[team+'_'+md] || null; }
 //   .md / .plan = the round to plan for (default STATE.md)
 //   .live       = the round currently in progress (for the live decision desk), or null
 //   .status     = 'upcoming' (before plan round's first kickoff) | 'in_progress' (a round is live)
-// null once the group stage is fully played (knockout dates aren't in KICKOFFS → manual).
+// Walks the full round sequence (group MD1-3 from KICKOFFS, knockouts R32-Final from the
+// auto-populated KNOCKOUTS bracket). Returns null only once every round with known kickoffs is
+// fully played — knockout rounds whose matchups haven't resolved yet (empty KNOCKOUTS) are
+// skipped, so the app self-heals to the next round as the 6-hourly refresh fills the bracket.
+const MD_LABEL = m => /^[1-3]$/.test(String(m)) ? 'MD'+m : String(m);
+function roundKickoffs(md){
+  if(/^[1-3]$/.test(String(md)))
+    return Object.entries(KICKOFFS).filter(([k])=>k.endsWith('_'+md)).map(([,v])=>Date.parse(v)).filter(n=>!isNaN(n));
+  return Object.values(KNOCKOUTS).map(r=>r && r[md] && Date.parse(r[md].kickoff)).filter(n=>n && !isNaN(n));
+}
 function detectCurrentMd(now){
   const t = (now || new Date()).getTime();
-  for(const md of [1,2,3]){
-    const times = Object.entries(KICKOFFS).filter(([k])=>k.endsWith('_'+md)).map(([,v])=>Date.parse(v)).filter(n=>!isNaN(n));
+  const SEQ = ['1','2','3','R32','R16','QF','SF','F'];
+  for(let i=0;i<SEQ.length;i++){
+    const md = SEQ[i];
+    const times = roundKickoffs(md);
     if(!times.length) continue;
     const first = Math.min(...times), last = Math.max(...times);
-    if(t < first) return { md:String(md), plan:String(md), live:null, status:'upcoming', first, last };
-    if(t <= last){ const nxt = md < 3 ? String(md+1) : 'R32'; return { md:nxt, plan:nxt, live:String(md), status:'in_progress', first, last }; }
+    if(t < first) return { md, plan:md, live:null, status:'upcoming', first, last };
+    if(t <= last){ const nxt = SEQ[i+1] || md; return { md:nxt, plan:nxt, live:md, status:'in_progress', first, last }; }
     // else this round is fully played → advance to the next
   }
   return null;
@@ -926,8 +937,8 @@ function updateMdBanner(){
   const d = detectCurrentMd();
   if(!d){ el.textContent = ''; return; }
   el.innerHTML = d.status==='in_progress'
-    ? `<span class="warn">● MD${d.live} live</span> <span class="dim">— locked; now planning <b>MD${d.plan}</b></span>`
-    : `<span class="good">● MD${d.plan} upcoming</span> <span class="dim">— deadline at first kickoff</span>`;
+    ? `<span class="warn">● ${MD_LABEL(d.live)} live</span> <span class="dim">— locked; now planning <b>${MD_LABEL(d.plan)}</b></span>`
+    : `<span class="good">● ${MD_LABEL(d.plan)} upcoming</span> <span class="dim">— deadline at first kickoff</span>`;
 }
 // PRE-COMPUTED slot map — done once at load to keep optimizer hot loops fast.
 // Without this, each kickoffSlot call did O(144) filter+sort, freezing the page when called
@@ -1422,6 +1433,13 @@ const KO_AVG_OPP = {
   QF:{def:84,att:85},
   SF:{def:86,att:87},
   F:{def:88,att:89},
+};
+
+// Real knockout bracket + kickoff times — AUTO-POPULATED by scripts/refresh-odds.mjs from ESPN
+// once each round's matchups resolve (a team's 4th-8th game ⇒ R32/R16/QF/SF/F). Empty until the
+// first post-group refresh runs; getOppFor() and detectCurrentMd() fall back to KO_AVG_OPP / null
+// for any round not yet filled. Shape: team -> round -> { opp, home, kickoff(ISO 8601) }.
+const KNOCKOUTS = {
 };
 
 // ---------- PLAYERS ----------
@@ -2919,7 +2937,13 @@ function getOppFor(playerTeam, md){
     if(!f) return null;
     return {opp:f.opp, home:f.home, def:TEAMS[f.opp].def, att:TEAMS[f.opp].att};
   }
-  // knockouts: average opp
+  // knockouts: real bracket matchup if the round has resolved (from KNOCKOUTS), else a coarse
+  // average-opponent profile. Venues are neutral, so no home edge except for host nations.
+  const ko = KNOCKOUTS[playerTeam] && KNOCKOUTS[playerTeam][md];
+  if(ko && TEAMS[ko.opp]){
+    const home = (TEAMS[playerTeam] && TEAMS[playerTeam].host) ? 0.15 : 0;
+    return {opp:ko.opp, home, def:TEAMS[ko.opp].def, att:TEAMS[ko.opp].att};
+  }
   const o = KO_AVG_OPP[md];
   return {opp:null, home:0, def:o.def, att:o.att};
 }
@@ -3033,9 +3057,12 @@ function projectXPts(p, md){
 
   // team xG: prefer market-derived (Team Total Goals) → Poisson-fit (bookie_xg) → Elo
   let teamXG, teamXGA, teamCsProb, xgSource = 'elo';
+  // Keyed lookups only return an entry for matchdays the refresh job actually priced — group
+  // (1/2/3) always, and knockout rounds (R32-F) once bookies price them. Presence of the entry
+  // is the gate: use real market/bookie odds whenever they exist, group or knockout.
   const market = BOOKIE_MARKETS[p.team]?.[md];
   const bookie = BOOKIE_XG[p.team]?.[md];
-  if(market && (md==='1' || md==='2' || md==='3' || md===1 || md===2 || md===3)){
+  if(market){
     // Best signal: market-derived per-team xG line + DIRECT CS market
     teamXG = market.xg ?? bookie?.teamXG;
     teamXGA = market.opp_xg ?? bookie?.oppXG;
@@ -3046,7 +3073,7 @@ function projectXPts(p, md){
       teamCsProb = Math.exp(-teamXGA);
       xgSource = 'market_xg';
     }
-  } else if(bookie && (md==='1' || md==='2' || md==='3' || md===1 || md===2 || md===3)){
+  } else if(bookie){
     teamXG = bookie.teamXG; teamXGA = bookie.oppXG;
     teamCsProb = Math.exp(-teamXGA);
     xgSource = 'poisson_fit';
@@ -3168,11 +3195,11 @@ function projectGK(p, md){
   let teamXGA_gk, teamCsProb_gk, xgSource = 'elo';
   const market = BOOKIE_MARKETS[p.team]?.[md];
   const bookieGK = BOOKIE_XG[p.team]?.[md];
-  if(market && (md==='1' || md==='2' || md==='3' || md===1 || md===2 || md===3)){
+  if(market){
     teamXGA_gk = market.opp_xg ?? bookieGK?.oppXG ?? (baseXG * (fx.att / t.def));
     if(market.cs != null){ teamCsProb_gk = market.cs; xgSource = 'market_cs'; }
     else { teamCsProb_gk = Math.exp(-teamXGA_gk); xgSource = 'market_xg'; }
-  } else if(bookieGK && (md==='1' || md==='2' || md==='3' || md===1 || md===2 || md===3)){
+  } else if(bookieGK){
     teamXGA_gk = bookieGK.oppXG;
     teamCsProb_gk = Math.exp(-teamXGA_gk);
     xgSource = 'poisson_fit';
