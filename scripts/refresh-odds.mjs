@@ -365,5 +365,30 @@ async function main(){
   console.log(`[refresh-odds] patched index.html — snapshot ${today}`);
 }
 
+// --probe-players: dump the play.fifa.com players.json stats shape so we can see what real
+// per-player data (goals/assists/minutes vs just roundPoints) is available before building on it.
+async function probePlayers(){
+  const data = await getJSON('https://play.fifa.com/json/fantasy/players.json');
+  const arr = Array.isArray(data) ? data : (data.players || data.value || data.data || []);
+  console.log(`[probe-players] top-level: ${Array.isArray(data)?'array':'object keys='+Object.keys(data).join(',')}; count=${arr.length}`);
+  if(!arr.length) return;
+  console.log('[probe-players] player[0] keys:', Object.keys(arr[0]).join(', '));
+  console.log('[probe-players] player[0]:', JSON.stringify(arr[0]).slice(0, 900));
+  // the most-pointed player has definitely played → richest stats sample
+  const withTot = arr.map(p => ({p, tot:(p.stats?.roundPoints||[]).reduce((a,b)=>a+(b||0),0)}))
+                     .sort((a,b)=>b.tot-a.tot);
+  const top = withTot[0]?.p;
+  if(top){
+    console.log('[probe-players] top scorer:', top.knownName || top.lastName, 'tot', withTot[0].tot);
+    console.log('[probe-players] top.stats keys:', Object.keys(top.stats||{}).join(', '));
+    console.log('[probe-players] top.stats FULL:', JSON.stringify(top.stats).slice(0, 1800));
+  }
+  const keyHist = {};
+  for(const p of arr) for(const k of Object.keys(p.stats||{})) keyHist[k] = (keyHist[k]||0)+1;
+  console.log('[probe-players] stats-key histogram:', JSON.stringify(keyHist));
+}
+
 const PROBE = process.argv.includes('--probe');
-(PROBE ? probe() : main()).catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
+const PROBE_PLAYERS = process.argv.includes('--probe-players');
+(PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
+  .catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
