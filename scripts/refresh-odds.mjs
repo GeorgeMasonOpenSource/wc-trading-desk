@@ -27,6 +27,20 @@ const EVENT_ODDS = id => `https://sports.core.api.espn.com/v2/sports/soccer/leag
 const ROUND_OF = n => n <= 3 ? String(n) : ({4:'R32',5:'R16',6:'QF',7:'SF',8:'F'}[n] || null);
 const IS_KO = md => md != null && !/^[1-3]$/.test(md);
 
+// Unresolved knockout slots appear as events with PLACEHOLDER competitors (abbreviation "RD32",
+// "TBD", etc.) — not empty, so they'd otherwise inflate the per-team game ordinal and produce
+// bogus matchups. Only count/record games between two REAL teams. The valid set is derived from
+// index.html's own KICKOFFS keys ("MEX_1":...) so it stays in sync with the 48-team field.
+function validTeamSet(){
+  try {
+    const h = fs.readFileSync(INDEX, 'utf8');
+    const s = new Set([...h.matchAll(/"([A-Z]{3})_[123]":/g)].map(m => m[1]));
+    return s.size >= 32 ? s : null;
+  } catch { return null; }
+}
+const VALID_TEAMS = validTeamSet();
+const isRealTeam = ab => ab ? (VALID_TEAMS ? VALID_TEAMS.has(ab) : /^[A-Z]{3}$/.test(ab)) : false;
+
 const americanToProb = a => a < 0 ? (-a) / (-a + 100) : 100 / (a + 100);
 const devig = probs => { const s = probs.reduce((a,b)=>a+b,0); return probs.map(p=>p/s); };
 
@@ -105,35 +119,41 @@ async function probe(){
   if(!events.length) throw new Error('no events');
 
   // Replay the ordinal→round mapping so CI logs show whether knockouts are ingested correctly.
-  const gameNo = {}; const byRound = {}; const koMatchups = [];
+  const gameNo = {}; const byRound = {}; const koMatchups = []; const realEvents = [];
   for(const ev of events){
     const c = ev.competitions?.[0]; if(!c) continue;
     const h = c.competitors?.find(x=>x.homeAway==='home')?.team?.abbreviation;
     const a = c.competitors?.find(x=>x.homeAway==='away')?.team?.abbreviation;
-    if(!h || !a) continue;   // unresolved/placeholder fixture
+    if(!isRealTeam(h) || !isRealTeam(a)) continue;   // skip unresolved placeholder fixtures
     gameNo[h]=(gameNo[h]||0)+1; gameNo[a]=(gameNo[a]||0)+1;
     const round = ROUND_OF(gameNo[h]);
     byRound[round] = (byRound[round]||0)+1;
+    realEvents.push(ev);
     if(IS_KO(round)) koMatchups.push(`${round}: ${h} v ${a} @ ${ev.date}`);
   }
-  console.log(`[probe] ${events.length} events; games per round:`, JSON.stringify(byRound));
+  console.log(`[probe] ${events.length} events (${realEvents.length} real-vs-real); games per round:`, JSON.stringify(byRound));
   console.log(`[probe] knockout matchups detected (${koMatchups.length}):`);
   koMatchups.forEach(m=>console.log('   ', m));
 
-  // Dump odds shapes for the LAST event (most likely an upcoming/priced knockout game if any).
-  const e = events[events.length-1];
+  // Dump odds shapes for the LAST real-matchup event (most likely an upcoming/priced KO game).
+  const e = realEvents[realEvents.length-1];
+  if(!e){ console.log('[probe] no real-team events to sample odds from'); return; }
   console.log(`[probe] sampling odds for event ${e.id}: ${e.name} @ ${e.date}`);
   const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
-  const items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items);
+  let items = [];
+  try { items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items); }
+  catch(err){ console.log(`[probe] no odds for this event (${err.message}) — expected for unpriced rounds`); return; }
   const it = items[0];
   console.log(`[probe] provider ${it?.provider?.name} (${it?.provider?.id}); homeTeam $ref: ${it?.homeTeamOdds?.team?.$ref}; awayTeam $ref: ${it?.awayTeamOdds?.team?.$ref}`);
   const pid = it?.provider?.id ?? 100;
   const all = [];
-  for(let page=1; page<=5; page++){
-    const pj = await getJSON(`${base}/odds/${pid}/propBets?limit=200&page=${page}`);
-    all.push(...(pj.items||[]));
-    if(all.length >= (pj.count||0)) break;
-  }
+  try {
+    for(let page=1; page<=5; page++){
+      const pj = await getJSON(`${base}/odds/${pid}/propBets?limit=200&page=${page}`);
+      all.push(...(pj.items||[]));
+      if(all.length >= (pj.count||0)) break;
+    }
+  } catch(err){ console.log(`[probe] propBets unavailable (${err.message}) — round likely unpriced`); }
   console.log(`[probe] fetched ${all.length} props`);
   const byType = {};
   for(const p of all){
@@ -172,10 +192,10 @@ async function main(){
     const comps = comp.competitors || [];
     const home = comps.find(c=>c.homeAway==='home');
     const away = comps.find(c=>c.homeAway==='away');
-    // Unresolved knockout slots show placeholder competitors with no abbreviation — skip them
-    // (they carry no real matchup or odds yet); they'll resolve in a later refresh.
-    if(!home?.team?.abbreviation || !away?.team?.abbreviation) continue;
-    const h = home.team.abbreviation, a = away.team.abbreviation;
+    // Skip unresolved knockout slots (placeholder competitors like "RD32"/"TBD") — counting them
+    // would corrupt the game ordinal and emit bogus matchups. They resolve in a later refresh.
+    const h = home?.team?.abbreviation, a = away?.team?.abbreviation;
+    if(!isRealTeam(h) || !isRealTeam(a)) continue;
     teamGameNo[h] = (teamGameNo[h]||0)+1; teamGameNo[a] = (teamGameNo[a]||0)+1;
     const mdH = ROUND_OF(teamGameNo[h]), mdA = ROUND_OF(teamGameNo[a]);
     if(mdH == null || mdA == null) continue;   // beyond the Final / unexpected ordinal
