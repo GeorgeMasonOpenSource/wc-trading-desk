@@ -188,6 +188,15 @@
   .dcell .s{font-size:11.5px;color:var(--ink2);margin-top:3px;line-height:1.4}
   .dcell.act{border-color:rgba(62,224,160,.5);background:linear-gradient(180deg,rgba(62,224,160,.08),transparent)}
   .dcell.hold{opacity:.92}
+  /* full-screen loading placeholder (shown until bootstrap renders) */
+  #app-loading{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    background:radial-gradient(900px 500px at 70% -10%,rgba(62,224,160,.07),transparent 60%),var(--bg);transition:opacity .45s ease}
+  #app-loading.hidden{opacity:0;pointer-events:none}
+  #app-loading .brand-lg{font-size:24px;font-weight:800;letter-spacing:.3px}
+  #app-loading .brand-lg span{color:var(--acc)}
+  #app-loading .spinner{width:40px;height:40px;border-radius:50%;border:3px solid var(--line2);border-top-color:var(--acc);animation:spin .8s linear infinite}
+  #app-loading .msg{color:var(--ink2);font-size:13px}
+  @keyframes spin{to{transform:rotate(360deg)}}
   details.tool{background:linear-gradient(180deg,rgba(255,255,255,.02),transparent 100px),var(--panel);
     border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow-sm)}
   details.tool>summary{cursor:pointer;font-size:15.5px;font-weight:700;color:var(--ink);list-style:none;display:flex;align-items:center;gap:9px}
@@ -254,6 +263,11 @@
 </head>
 <body>
 
+<div id="app-loading">
+  <div class="brand-lg">World Cup <span>FPL</span></div>
+  <div class="spinner"></div>
+  <div class="msg">Loading squad &amp; live odds…</div>
+</div>
 <header>
   <div class="brand">World Cup <span>FPL</span></div>
   <div class="dim mono" style="font-size:11px">FIFA World Cup 2026 Fantasy · data-driven decisions</div>
@@ -967,7 +981,12 @@ const KICKOFFS = {
   "USA_1":"2026-06-13T01:00Z","USA_2":"2026-06-19T19:00Z","USA_3":"2026-06-26T02:00Z",
   "UZB_1":"2026-06-18T02:00Z","UZB_2":"2026-06-23T17:00Z","UZB_3":"2026-06-27T23:30Z",
 };
-function getKickoff(team, md){ return KICKOFFS[team+'_'+md] || null; }
+function getKickoff(team, md){
+  // group kickoffs live in KICKOFFS; knockout kickoffs in the auto-populated KNOCKOUTS bracket.
+  return KICKOFFS[team+'_'+md]
+    || (KNOCKOUTS[team] && KNOCKOUTS[team][md] && KNOCKOUTS[team][md].kickoff)
+    || null;
+}
 
 // Auto-detect matchday state from the real schedule + clock. A round's DEADLINE is its first
 // kickoff; once that passes the squad is locked, so all planning (captaincy, transfers, chips)
@@ -1012,21 +1031,29 @@ function updateMdBanner(){
 // PRE-COMPUTED slot map — done once at load to keep optimizer hot loops fast.
 // Without this, each kickoffSlot call did O(144) filter+sort, freezing the page when called
 // from squadScore() inside the 200-iter local-search loop (~5M ops).
-const _SLOT_CACHE = (()=>{
-  const cache = {};
-  for(const md of [1,2,3]){
-    const entries = Object.entries(KICKOFFS).filter(([k,_])=>k.endsWith('_'+md)).map(([_,v])=>v).sort();
-    const n = entries.length;
-    const t1 = entries[Math.floor(n/3)];
-    const t2 = entries[Math.floor((2*n)/3)];
-    cache[md] = {t1, t2};
+// Lazy + memoized so knockout rounds (whose kickoffs live in KNOCKOUTS, populated after this point
+// at load time) get real early/middle/late bounds too — not just the group stage. First call per
+// round computes; the optimizer hot loop reuses the cached bounds.
+const _SLOT_CACHE = {};
+function slotBounds(md){
+  if(_SLOT_CACHE[md]) return _SLOT_CACHE[md];
+  let times;
+  if(/^[1-3]$/.test(String(md))){
+    times = Object.entries(KICKOFFS).filter(([k])=>k.endsWith('_'+md)).map(([,v])=>v);
+  } else {
+    times = Object.values(KNOCKOUTS || {}).map(r=>r && r[md] && r[md].kickoff).filter(Boolean);
   }
-  return cache;
-})();
+  times = times.filter(Boolean).sort();
+  const n = times.length;
+  const b = n < 3 ? {t1:times[0]||'0', t2:times[n-1]||'￿'}
+                  : {t1:times[Math.floor(n/3)], t2:times[Math.floor((2*n)/3)]};
+  _SLOT_CACHE[md] = b;
+  return b;
+}
 function kickoffSlot(team, md){
   const t = getKickoff(team, md);
   if(!t) return 2;
-  const bounds = _SLOT_CACHE[md];
+  const bounds = slotBounds(md);
   if(!bounds) return 2;
   if(t < bounds.t1) return 1;
   if(t < bounds.t2) return 2;
@@ -10477,13 +10504,16 @@ async function bootstrap(){
     applyOptimized();   // fresh visitor: show the optimizer suggestion as a starting point
   }
   refresh();
+  _hideLoading();   // first render done — reveal the app
   // Results feedback loop: recompute calibration from the latest actuals; if it's trained, re-render
   // so the learned correction applies this session too (the cached value already applied on load).
   refreshCalibration().then(cal=>{ if(cal && cal._n >= 10) refresh(); });
   // capture monitor baseline if first visit, then after refresh save the new baseline for next time
   setTimeout(()=>captureMonitorSnapshot(), 2000);
 }
-bootstrap();
+function _hideLoading(){ const l = document.getElementById('app-loading'); if(l) l.classList.add('hidden'); }
+setTimeout(_hideLoading, 7000);   // safety: never trap the user behind the loader if bootstrap stalls
+bootstrap().catch(e=>{ console.error('[bootstrap]', e); _hideLoading(); });
 
 </script>
 </body>
