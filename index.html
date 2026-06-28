@@ -97,7 +97,12 @@
     background:linear-gradient(180deg,rgba(20,28,38,.82),rgba(8,12,18,.88));
     border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 14px -6px rgba(0,0,0,.7);
     transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+  .pitch-card.v2{position:relative}
   .pitch-card.v2:hover{transform:translateY(-3px);border-color:var(--acc);box-shadow:0 10px 24px -8px rgba(0,0,0,.8),var(--glow)}
+  .pitch-card .card-x{position:absolute;top:4px;right:4px;width:18px;height:18px;padding:0;border-radius:50%;border:1px solid var(--line2);background:rgba(0,0,0,.5);color:var(--ink2);font-size:10px;line-height:1;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s}
+  .pitch-card .card-x:hover{color:var(--bad);border-color:var(--bad);transform:none}
+  .pitch-card .card-swap{position:absolute;top:5px;left:5px;font-size:11px;color:var(--ink3);opacity:0;pointer-events:none}
+  .pitch-card.v2:hover .card-x,.pitch-card.v2:hover .card-swap{opacity:.9}
   .pitch-card.v2 .shirt{display:flex;justify-content:center;margin-bottom:5px}
   .pitch-card.v2 .shirt svg{width:34px;height:34px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5))}
   .pitch-card.v2 .n{font-size:11.5px;font-weight:700;line-height:1.1;margin-bottom:4px;letter-spacing:-.2px}
@@ -275,6 +280,7 @@
     <span>Budget: <b id="conn-budget" class="mono">$100.0m</b></span>
     <span>Squad: <b id="conn-squad" class="mono">0/15</b></span>
     <span>Spend: <b id="conn-spend" class="mono">$0.0m</b></span>
+    <span>Free transfers: <b id="conn-ft" class="mono">—</b></span>
     <span>MD: <button id="md-prev" style="padding:3px 6px">‹</button> <select id="conn-md" style="margin:0 2px"><option value="1">MD1</option><option value="2">MD2</option><option value="3">MD3</option><option value="R32">R32</option><option value="R16">R16</option><option value="QF">QF</option><option value="SF">SF</option><option value="F">Final</option></select> <button id="md-next" style="padding:3px 6px">›</button> <span class="mono" id="md-autodetect" style="font-size:11px;margin-left:6px"></span></span>
     <span class="dim mono" id="last-updated" style="font-size:11px">Snapshot</span> <span class="dim mono" id="override-badge" style="font-size:11px;display:none"></span> <button id="reset-btn" title="Reset squad">Reset</button>
   </div>
@@ -300,10 +306,15 @@
       <div id="rec-list"></div>
     </div>
     <div class="panel">
-      <h2>Squad Snapshot</h2>
+      <h2>👕 My Team <span id="myteam-headcount" class="dim" style="font-size:13px;font-weight:400;margin-left:6px"></span></h2>
       <div class="tiles" id="snap-tiles"></div>
       <hr>
       <div class="pitch" id="pitch"></div>
+      <div id="myteam-savebar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+        <button class="primary" onclick="saveMyTeam()" style="font-size:14px;padding:10px 18px">💾 Save my team</button>
+        <button onclick="resetToMyTeam()" style="font-size:14px;padding:10px 16px">↺ Load saved team</button>
+        <span class="myteam-status dim" style="font-size:12px"></span>
+      </div>
     </div>
   </div>
   <div style="height:18px"></div>
@@ -539,6 +550,8 @@
         <button data-pos="FWD">FWD</button>
       </div>
       <label>Max price $<input id="p-maxprice" type="number" value="13" step="0.5" style="width:60px">m</label>
+      <label>Min selected <input id="p-minown" type="number" value="0" step="1" min="0" max="100" style="width:52px">%</label>
+      <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="p-affordable"> Affordable only</label>
       <span class="dim mono" id="p-count"></span>
     </div>
     <table id="p-table"></table>
@@ -4715,6 +4728,8 @@ function refresh(){
   document.getElementById('conn-spend').textContent = '$'+spend.toFixed(1)+'m';
   document.getElementById('conn-squad').textContent = STATE.squad.length+'/15';
   document.getElementById('conn-budget').textContent = '$'+STATE.budget.toFixed(1)+'m';
+  const ftEl = document.getElementById('conn-ft');
+  if(ftEl){ const a = FT_ALLOC[STATE.md]; ftEl.textContent = (a==null) ? '∞ (pre-MD1)' : (a>=99 ? '∞ (rebuild)' : String(a)); }
   computeRecommendation();   // canonical captain/XI before any panel renders
   renderAll();
 }
@@ -5321,7 +5336,9 @@ function renderPitch(){
     const srcDots = score === 3 ? '●●●' : score === 2 ? '●●' : score === 1 ? '●' : '○';
     const srcLabel = `Data confidence: team-xG ${dim1?'✓ bookie':'✗ Elo'} · MRI ${dim2?'✓ observed':'✗ heuristic'} · player stats ${dim3?'✓ curated':'✗ proxy'}`;
     const srcColor = score === 3 ? 'var(--good)' : score === 2 ? 'var(--ink2)' : 'var(--warn)';
-    return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer">
+    return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer" title="Tap to swap ${shortName(p.name)}">
+      <button class="card-x" title="Remove ${shortName(p.name)}" onclick="event.stopPropagation();toggleSquad(${p.id});refresh()">✕</button>
+      <span class="card-swap" title="Swap">⇄</span>
       <div class="shirt" style="pointer-events:none">${shirtSvg(p.team, isCap, isVC)}</div>
       <div class="n pos-${p.pos}" style="pointer-events:none">${shortName(p.name)}</div>
       <div class="c" style="pointer-events:none"><span class="badge-group" style="background:${c.primary};color:${c.alt};border-color:${c.primary}">${p.team}</span> <span class="dim mono" style="font-size:10px">$${p.price.toFixed(1)}</span> <span title="${srcLabel}" style="color:${srcColor};font-size:9px;letter-spacing:-1px">${srcDots}</span></div>
@@ -5399,9 +5416,21 @@ function renderPlayers(){
       opp: r?.fx?.opp,
     };
   });
+  const minOwn = parseFloat(document.getElementById('p-minown')?.value) || 0;
+  const affordableOnly = !!document.getElementById('p-affordable')?.checked;
+  const bank = STATE.budget - STATE.squad.reduce((a,id)=>a+(PLAYER_BY_ID[id]?.price||0),0);
+  // "affordable" = you could bring them in for a same-position swap: price ≤ bank + cheapest same-pos
+  // player you own (the money you'd free by selling). Falls back to bank if none owned.
+  const cheapestOwnedByPos = {};
+  STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean).forEach(pl=>{ const c=cheapestOwnedByPos[pl.pos]; if(c==null||pl.price<c) cheapestOwnedByPos[pl.pos]=pl.price; });
   rows = rows.filter(p=>{
     if(pPosFilter!=='ALL' && p.pos!==pPosFilter) return false;
     if(p.price > maxPrice) return false;
+    if(minOwn > 0 && (p.own*100) < minOwn) return false;
+    if(affordableOnly && !STATE.squad.includes(p.id)){
+      const headroom = bank + (cheapestOwnedByPos[p.pos] ?? 0);
+      if(p.price > headroom + 1e-6) return false;
+    }
     if(search){
       const hay = (p.name+' '+p.team+' '+TEAMS[p.team].name).toLowerCase();
       if(!hay.includes(search)) return false;
@@ -10150,13 +10179,20 @@ function myTeamDiff(){
   return {changed, base};
 }
 function renderMyTeamBar(){
-  const el = document.getElementById('myteam-status'); if(!el) return;
+  // headcount on the My Team panel
+  const hc = document.getElementById('myteam-headcount');
+  if(hc){ const spend = STATE.squad.reduce((a,id)=>a+(PLAYER_BY_ID[id]?.price||0),0); hc.textContent = `· ${STATE.squad.length}/15 · $${(STATE.budget-spend).toFixed(1)}m bank`; }
+  const els = document.querySelectorAll('.myteam-status, #myteam-status'); if(!els.length) return;
   const d = myTeamDiff();
-  if(!d){ el.innerHTML = '<span class="warn">No saved team yet — Save to set your baseline.</span>'; return; }
-  const when = new Date(d.base.savedAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
-  el.innerHTML = d.changed === 0
-    ? `<span class="good">✓ matches saved team</span> <span class="dim">(saved ${when})</span>`
-    : `<span class="warn">⚠ ${d.changed} change${d.changed>1?'s':''} vs saved team</span> <span class="dim">— Reset to revert, or Save to commit (saved ${when})</span>`;
+  let html;
+  if(!d){ html = '<span class="warn">No saved team yet — tap “Save my team” to set your baseline.</span>'; }
+  else {
+    const when = new Date(d.base.savedAt).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+    html = d.changed === 0
+      ? `<span class="good">✓ matches your saved team</span> <span class="dim">(saved ${when})</span>`
+      : `<span class="warn">⚠ ${d.changed} change${d.changed>1?'s':''} vs saved team</span> <span class="dim">— Load to revert, or Save to commit (saved ${when})</span>`;
+  }
+  els.forEach(el=>el.innerHTML = html);
 }
 window.saveMyTeam = saveMyTeam; window.resetToMyTeam = resetToMyTeam;
 
@@ -10343,6 +10379,8 @@ document.getElementById('reset-btn').onclick = ()=>{
 };
 document.getElementById('p-search').oninput = ()=>renderPlayers();
 document.getElementById('p-maxprice').onchange = ()=>renderPlayers();
+{ const mo=document.getElementById('p-minown'); if(mo) mo.oninput = ()=>renderPlayers();
+  const af=document.getElementById('p-affordable'); if(af) af.onchange = ()=>renderPlayers(); }
 document.querySelectorAll('#p-pos-seg button').forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll('#p-pos-seg button').forEach(x=>x.classList.remove('on'));
