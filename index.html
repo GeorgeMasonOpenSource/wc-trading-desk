@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WC Trading Desk — FIFA Fantasy 2026 Quant Terminal</title>
+<title>World Cup FPL — FIFA World Cup 2026 Fantasy</title>
 <style>
   :root{
     --bg:#080a0f; --panel:#121822; --panel2:#1a212e; --line:#27303f; --line2:#323d4f;
@@ -80,33 +80,45 @@
   tr.locked{opacity:.55}
   tr.starred td:first-child::before{content:"★ ";color:var(--warn)}
 
-  /* pitch */
-  .pitch{position:relative;background:linear-gradient(180deg,#0e2620 0%,#0a1d18 100%);border:1px solid var(--line);border-radius:10px;aspect-ratio:5/7;padding:12px}
-  .pitch::before{content:"";position:absolute;inset:12px;border:1px solid rgba(255,255,255,.07);border-radius:6px;pointer-events:none}
-  .pitch-row{display:flex;justify-content:space-around;margin:14px 0}
+  /* pitch — modern turf with crisp markings */
+  .pitch{position:relative;border:1px solid var(--line);border-radius:var(--r);aspect-ratio:5/7;padding:18px 12px;overflow:hidden;
+    background:
+      repeating-linear-gradient(180deg, rgba(255,255,255,.022) 0 9%, transparent 9% 18%),
+      linear-gradient(170deg,#11362b 0%,#0c2a22 55%,#0a221c 100%)}
+  .pitch::before{content:"";position:absolute;inset:14px;border:1.5px solid rgba(255,255,255,.10);border-radius:8px;pointer-events:none}
+  .pitch::after{content:"";position:absolute;left:50%;top:50%;width:88px;height:88px;transform:translate(-50%,-50%);
+    border:1.5px solid rgba(255,255,255,.09);border-radius:50%;pointer-events:none}
+  .pitch-row{display:flex;justify-content:space-around;gap:8px;margin:16px 0;position:relative;z-index:1}
   .pitch-card{width:78px;text-align:center;background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:6px;padding:6px 4px;cursor:pointer;font-size:11px}
-  .pitch-card:hover{border-color:var(--acc)}
   .pitch-card .n{font-weight:600;line-height:1.1;font-size:11.5px}
   .pitch-card .c{color:var(--ink2);font-size:10px}
   .pitch-card .xp{color:var(--acc);font-family:var(--mono);font-size:11px;margin-top:1px}
-  .pitch-card.v2{width:100px;padding:6px 4px 4px;background:linear-gradient(180deg,rgba(0,0,0,0.45),rgba(0,0,0,0.7))}
-  .pitch-card.v2 .shirt{display:flex;justify-content:center;margin-bottom:2px}
-  .pitch-card.v2 .n{font-size:11px;font-weight:600;line-height:1.1;margin-bottom:2px}
-  .pitch-card.v2 .c{display:flex;align-items:center;justify-content:center;gap:4px;margin-bottom:3px}
-  .pitch-card.v2 .c .badge-group{font-size:9px;padding:0 4px;font-weight:600}
-  .fx-row{display:flex;gap:2px;justify-content:center;flex-wrap:nowrap}
-  .fx-pill{font-size:9px;font-family:var(--mono);padding:1px 3px;border-radius:2px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);min-width:32px;line-height:1.2;display:inline-block;text-align:center}
-  .fx-pill.good{background:rgba(57,211,164,.15);border-color:rgba(57,211,164,.4);color:var(--good)}
-  .fx-pill.bad{background:rgba(255,93,108,.15);border-color:rgba(255,93,108,.4);color:var(--bad)}
-  .fx-pill .fx-xp{display:block;font-weight:600}
+  .pitch-card.v2{width:104px;padding:9px 6px 7px;border-radius:12px;
+    background:linear-gradient(180deg,rgba(20,28,38,.82),rgba(8,12,18,.88));
+    border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 14px -6px rgba(0,0,0,.7);
+    transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+  .pitch-card.v2:hover{transform:translateY(-3px);border-color:var(--acc);box-shadow:0 10px 24px -8px rgba(0,0,0,.8),var(--glow)}
+  .pitch-card.v2 .shirt{display:flex;justify-content:center;margin-bottom:5px}
+  .pitch-card.v2 .shirt svg{width:34px;height:34px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5))}
+  .pitch-card.v2 .n{font-size:11.5px;font-weight:700;line-height:1.1;margin-bottom:4px;letter-spacing:-.2px}
+  .pitch-card.v2 .c{display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:5px}
+  .pitch-card.v2 .c .badge-group{font-size:9px;padding:1px 5px;font-weight:700;border-radius:5px}
+  .fx-row{display:flex;gap:3px;justify-content:center;flex-wrap:nowrap}
+  .fx-pill{font-size:9px;font-family:var(--mono);padding:2px 4px;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--line2);color:var(--ink2);min-width:30px;line-height:1.25;display:inline-block;text-align:center}
+  .fx-pill.good{background:rgba(62,224,160,.16);border-color:rgba(62,224,160,.45);color:var(--good)}
+  .fx-pill.bad{background:rgba(255,107,120,.15);border-color:rgba(255,107,120,.42);color:var(--bad)}
+  .fx-pill .fx-xp{display:block;font-weight:700;color:var(--ink)}
   @media (max-width:768px){
-    .pitch-card.v2{width:auto;flex:1;min-width:0;padding:4px 2px 3px}
+    .pitch-card.v2{width:auto;flex:1;min-width:0;padding:6px 3px 5px}
     .pitch-card.v2 .n{font-size:10px}
+    .pitch-card.v2 .shirt svg{width:28px;height:28px}
     .fx-pill{font-size:8px;min-width:24px;padding:1px 2px}
   }
-  .pitch-card.cap{outline:2px solid var(--warn)}
-  .pitch-card.vcap{outline:2px dashed var(--ink2)}
-  .pitch-card.empty{opacity:.4;border-style:dashed}
+  .pitch-card.cap{border-color:var(--warn)!important;box-shadow:0 0 0 2px var(--warn),0 8px 20px -6px rgba(255,203,92,.5)!important}
+  .pitch-card.cap .n::after{content:" Ⓒ";color:var(--warn);font-weight:800}
+  .pitch-card.vcap{border-color:var(--ink2)!important;box-shadow:0 0 0 1.5px var(--ink2)!important}
+  .pitch-card.vcap .n::after{content:" Ⓥ";color:var(--ink2);font-weight:800}
+  .pitch-card.empty{opacity:.35;border-style:dashed}
 
   /* recs */
   .rec{display:grid;grid-template-columns:1fr auto;gap:10px;padding:14px 16px;
@@ -134,10 +146,14 @@
   .bar.warn > i{background:var(--warn)}
 
   /* drawer */
-  .drawer{position:fixed;right:0;top:0;bottom:0;width:420px;background:var(--panel);border-left:1px solid var(--line);transform:translateX(110%);transition:transform .25s;z-index:50;overflow-y:auto;padding:16px}
+  .drawer{position:fixed;right:0;top:0;bottom:0;width:440px;max-width:92vw;
+    background:linear-gradient(180deg,rgba(20,28,38,.6),transparent 220px),var(--panel);
+    border-left:1px solid var(--line2);transform:translateX(110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
+    z-index:50;overflow-y:auto;padding:22px;box-shadow:-20px 0 60px -20px rgba(0,0,0,.8)}
   .drawer.open{transform:translateX(0)}
-  .drawer h3{margin-top:0}
-  .drawer .x{position:absolute;right:12px;top:12px;background:none;border:none;color:var(--ink2);font-size:20px;cursor:pointer}
+  .drawer h3{margin-top:0;font-size:20px;font-weight:800;letter-spacing:-.3px}
+  .drawer .x{position:absolute;right:16px;top:14px;width:32px;height:32px;border-radius:50%;background:var(--panel2);border:1px solid var(--line2);color:var(--ink2);font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+  .drawer .x:hover{color:var(--ink);border-color:var(--acc);transform:none}
 
   /* filter bar */
   .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
@@ -226,8 +242,8 @@
 <body>
 
 <header>
-  <div class="brand">WC <span>TRADING DESK</span></div>
-  <div class="dim mono" style="font-size:11px">FIFA Fantasy 2026 · Deterministic Quant Terminal</div>
+  <div class="brand">World Cup <span>FPL</span></div>
+  <div class="dim mono" style="font-size:11px">FIFA World Cup 2026 Fantasy · data-driven decisions</div>
   <div class="conn">
     <span>Budget: <b id="conn-budget" class="mono">$100.0m</b></span>
     <span>Squad: <b id="conn-squad" class="mono">0/15</b></span>
@@ -5699,12 +5715,12 @@ function renderChips(){
     let rows = '<thead><tr><th>MD</th><th>Best 12th Man</th><th>Team</th><th>vs</th><th class="num">Raw xP</th><th class="num">Survival</th><th class="num">Expected xP</th></tr></thead><tbody>';
     for(const m of mds){
       const tm = bestTwelfthMan(STATE.squad, m);
-      if(!tm){ rows += `<tr><td>MD${m}</td><td colspan="6" class="dim">—</td></tr>`; continue; }
+      if(!tm){ rows += `<tr><td>${MD_LABEL(m)}</td><td colspan="6" class="dim">—</td></tr>`; continue; }
       const r = projectXPts(tm.p, m);
       const opp = r?.fx?.opp || '—';
       const isKO = typeof m === 'string' && !/^[1-3]$/.test(m);
       const surv = isKO ? `${(tm.survProb*100).toFixed(0)}%` : '100%';
-      rows += `<tr onclick="openPlayer(${tm.p.id})" style="cursor:pointer"><td>MD${m}</td><td><b>${tm.p.name}</b></td><td><span class="badge-group">${tm.p.team}</span></td><td class="dim">${opp}</td><td class="num">${tm.raw.toFixed(1)}</td><td class="num dim">${surv}</td><td class="num good">${tm.weighted.toFixed(1)}</td></tr>`;
+      rows += `<tr onclick="openPlayer(${tm.p.id})" style="cursor:pointer"><td>${MD_LABEL(m)}</td><td><b>${tm.p.name}</b></td><td><span class="badge-group">${tm.p.team}</span></td><td class="dim">${opp}</td><td class="num">${tm.raw.toFixed(1)}</td><td class="num dim">${surv}</td><td class="num good">${tm.weighted.toFixed(1)}</td></tr>`;
     }
     t12.innerHTML = rows + '</tbody>';
   } else if(t12){
@@ -5733,7 +5749,7 @@ function renderChips(){
 
   const tbl = document.getElementById('chip-table');
   tbl.innerHTML = `
-    <thead><tr><th>Chip</th>${mds.map(m=>`<th class="num">MD${m}</th>`).join('')}<th class="num">Best</th></tr></thead>
+    <thead><tr><th>Chip</th>${mds.map(m=>`<th class="num">${MD_LABEL(m)}</th>`).join('')}<th class="num">Best</th></tr></thead>
     <tbody>${chips.map(c=>{
       const cells = mds.map(m=>evGrid[m][c]);
       const best = cells.reduce((b,v,i)=>v!=null && (b==null||v>b.v)?{v,i}:b, null);
@@ -5744,7 +5760,7 @@ function renderChips(){
           const isBest = best && i===best.i;
           return `<td class="num ${isBest?'good':''}">${v.toFixed(1)}${isBest?' ★':''}</td>`;
         }).join('')}
-        <td class="num"><b class="good">${best?best.v.toFixed(1):'—'}</b> ${best?`<span class="dim">MD${mds[best.i]}</span>`:''}</td>
+        <td class="num"><b class="good">${best?best.v.toFixed(1):'—'}</b> ${best?`<span class="dim">${MD_LABEL(mds[best.i])}</span>`:''}</td>
       </tr>`;
     }).join('')}</tbody>
   `;
@@ -5768,7 +5784,7 @@ function renderChips(){
           <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
             <b>Use as 12th Man:</b> <span class="good">${tm.p.name}</span> <span class="badge-group">${tm.p.team}</span> $${tm.p.price.toFixed(1)}m
             ${opp ? `· vs ${opp}` : ''}
-            <br><span class="dim">Projects <b class="mono">${tm.raw.toFixed(1)}</b> raw xPts on MD${p.when}${p.when==='F'||p.when==='SF'||p.when==='QF'||p.when==='R16'||p.when==='R32' ? ` × ${(tm.survProb*100).toFixed(0)}% survival probability` : ''} = expected <b class="mono good">${tm.weighted.toFixed(1)}</b> xPts. No budget/country cap, no captaincy.</span>
+            <br><span class="dim">Projects <b class="mono">${tm.raw.toFixed(1)}</b> raw xPts on ${MD_LABEL(p.when)}${p.when==='F'||p.when==='SF'||p.when==='QF'||p.when==='R16'||p.when==='R32' ? ` × ${(tm.survProb*100).toFixed(0)}% survival probability` : ''} = expected <b class="mono good">${tm.weighted.toFixed(1)}</b> xPts. No budget/country cap, no captaincy.</span>
           </div>`;
       }
     }
@@ -5778,7 +5794,7 @@ function renderChips(){
       if(mc){
         pickDetails = `
           <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
-            <b>Auto-picks:</b> <span class="good">${mc.top.p.name}</span> <span class="badge-group">${mc.top.p.team}</span> · projected <b class="mono">${mc.top.x.toFixed(1)}</b> xPts on MD${p.when}
+            <b>Auto-picks:</b> <span class="good">${mc.top.p.name}</span> <span class="badge-group">${mc.top.p.team}</span> · projected <b class="mono">${mc.top.x.toFixed(1)}</b> xPts on ${MD_LABEL(p.when)}
             <br><span class="dim">Edge over 2nd-best (${mc.second?.p.name || '—'}, ${(mc.second?.x || 0).toFixed(1)}xP): <b class="mono ${mc.delta>1?'good':''}">+${mc.delta.toFixed(1)}</b>. Higher edge = more value from auto-cap.</span>
           </div>`;
       }
@@ -5799,13 +5815,13 @@ function renderChips(){
     else if(p.chip === 'Wildcard'){
       pickDetails = `
         <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
-          <b>Full squad rebuild:</b> click <i>Recompute plan</i> in Transfer Planner to see the optimal MD${p.when}-onwards squad. Best used right after MD1 lineups confirm or right before R16 knockout reset.
+          <b>Full squad rebuild:</b> click <i>Recompute plan</i> in Transfer Planner to see the optimal ${MD_LABEL(p.when)}-onwards squad. Best used right after MD1 lineups confirm or right before R16 knockout reset.
         </div>`;
     }
     return `<div class="rec ${i<2?'':'warn'}">
       <div>
         <div class="title">${i+1}. ${p.chip}</div>
-        <div class="sub">Play at <b>MD${p.when}</b>${p.chip==='Wildcard'?' · use before R32 (banned in R32)':p.chip==='Qualification Booster'?' · just before knockouts (best teams locked in)':''}</div>
+        <div class="sub">Play at <b>${MD_LABEL(p.when)}</b>${p.chip==='Wildcard'?' · use before R32 (banned in R32)':p.chip==='Qualification Booster'?' · just before knockouts (best teams locked in)':''}</div>
         ${pickDetails}
       </div>
       <div class="ev">+${p.ev.toFixed(1)}<span class="conf">EV vs no chip</span></div>
@@ -5897,7 +5913,7 @@ function openPlayer(id){
     if(!rr) return '';
     const opp = rr.fx.opp;
     return `<tr>
-      <td>MD${m}</td>
+      <td>${MD_LABEL(m)}</td>
       <td>vs ${opp} (${TEAMS[opp].name})</td>
       <td class="num">${rr.teamXG.toFixed(2)}</td>
       <td class="num">${rr.teamXGA.toFixed(2)}</td>
@@ -8885,8 +8901,10 @@ function openSwap(playerId){
       const bX = projectXPts(b,m)?.xpts ?? 0;
       return {md:m, delta: bX - pX};
     });
-    const horDelta = projectHorizon(b, _remainingHorizon()).total - projectHorizon(p,_remainingHorizon()).total;
-    return {b, deltas, horDelta};
+    const planH = _planningHorizon();
+    const planDelta = (projectHorizon(b, planH)?.total ?? 0) - (projectHorizon(p, planH)?.total ?? 0);
+    const tournDelta = (projectHorizon(b, 8)?.total ?? 0) - (projectHorizon(p, 8)?.total ?? 0);
+    return {b, deltas, planDelta, planH, tournDelta};
   });
 
   // For transfer alts: per-MD deltas + horizon delta
@@ -8914,7 +8932,7 @@ function openSwap(playerId){
         <div>
           <div class="title">${r.b.name} <span class="badge-group">${r.b.team}</span></div>
           <div class="sub">$${Number(r.b.price ?? 0).toFixed(1)}m · MRI ${Number(r.b.mri ?? 0).toFixed(2)} · ${fxBadges(r.b)}</div>
-          <div class="sub mono" style="font-size:10.5px;margin-top:4px">${r.deltas.slice(0,3).map(d=>`MD${d.md}: <span class="${d.delta>=0?'good':'bad'}">${d.delta>=0?'+':''}${Number(d.delta ?? 0).toFixed(1)}</span>`).join(' · ')}</div>
+          <div class="sub mono" style="font-size:10.5px;margin-top:4px">${r.deltas.slice(0,3).map(d=>`${MD_LABEL(d.md)}: <span class="${d.delta>=0?'good':'bad'}">${d.delta>=0?'+':''}${Number(d.delta ?? 0).toFixed(1)}</span>`).join(' · ')}</div>
         </div>
         <div style="text-align:right;display:flex;flex-direction:column;gap:2px;align-items:flex-end">
           <span class="mono ${r.planDelta>=0?'good':'bad'}" style="font-size:14px;font-weight:600">${r.planDelta>=0?'+':''}${Number(r.planDelta ?? 0).toFixed(1)}<span class="dim" style="font-size:10px;margin-left:4px">h=${r.planH}</span></span>
@@ -8930,7 +8948,7 @@ function openSwap(playerId){
         <div>
           <div class="title">${r.q.name} <span class="badge-group">${r.q.team}</span></div>
           <div class="sub">$${Number(r.q.price ?? 0).toFixed(1)}m (net ${r.netCost>=0?'+':''}$${Number(r.netCost ?? 0).toFixed(1)}m) · MRI ${Number(r.q.mri ?? 0).toFixed(2)} · ${fxBadges(r.q)}</div>
-          <div class="sub mono" style="font-size:10.5px;margin-top:4px">${r.deltas.map(d=>`MD${d.md}: <span class="${d.delta>=0?'good':'bad'}">${d.delta>=0?'+':''}${Number(d.delta ?? 0).toFixed(1)}</span>`).join(' · ')}</div>
+          <div class="sub mono" style="font-size:10.5px;margin-top:4px">${r.deltas.map(d=>`${MD_LABEL(d.md)}: <span class="${d.delta>=0?'good':'bad'}">${d.delta>=0?'+':''}${Number(d.delta ?? 0).toFixed(1)}</span>`).join(' · ')}</div>
         </div>
         <div style="text-align:right;display:flex;flex-direction:column;gap:2px;align-items:flex-end">
           <span class="mono ${r.planDelta>=0?'good':'bad'}" style="font-size:14px;font-weight:600">${r.planDelta>=0?'+':''}${Number(r.planDelta ?? 0).toFixed(1)}<span class="dim" style="font-size:10px;margin-left:4px">h=${r.planH} actionable</span></span>
@@ -9954,7 +9972,7 @@ function renderChipStrategyPanel(){
         const bg = isPast ? 'transparent' : (chips.length ? 'var(--panel2)' : 'transparent');
         const op = isPast ? 'opacity:0.45;' : '';
         return `<div style="flex:1;text-align:center;padding:6px 4px;background:${bg};border:${border};border-radius:4px;${op}">
-          <div class="${cls}" style="font-weight:600">MD${t}${isCurrent?' •':''}</div>
+          <div class="${cls}" style="font-weight:600">${MD_LABEL(t)}${isCurrent?' •':''}</div>
           <div style="font-size:10px;margin-top:2px">${chips.map(c=>c.chip.split(' ')[0]).join('<br>') || '—'}</div>
         </div>`;
       }).join('')}
@@ -9964,7 +9982,7 @@ function renderChipStrategyPanel(){
       const pickLine = c.pickPlayer ? `<div class="dim" style="font-size:11px;margin-top:2px">Pick: <b class="good">${c.pickPlayer.name}</b> <span class="badge-group">${c.pickPlayer.team}</span> $${c.pickPlayer.price.toFixed(1)}m</div>` : '';
       return `<div class="rec ${isPast?'warn':''}" style="margin-bottom:8px">
         <div>
-          <div class="title">${i+1}. ${c.chip} — Play at <b>MD${c.primary}</b>${c.alternate?` <span class="dim">(alt: MD${c.alternate})</span>`:''}</div>
+          <div class="title">${i+1}. ${c.chip} — Play at <b>${MD_LABEL(c.primary)}</b>${c.alternate?` <span class="dim">(alt: ${MD_LABEL(c.alternate)})</span>`:''}</div>
           <div class="sub" style="line-height:1.5">${c.narrative}</div>
           ${pickLine}
         </div>
