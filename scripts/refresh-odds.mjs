@@ -19,8 +19,27 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const INDEX = path.join(ROOT, 'index.html');
 const APPLY = process.argv.includes('--apply');
 
-const SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260627';
+// Window spans the whole tournament (group + knockouts). Completed games still appear as events
+// (with scores, usually no live odds), so each team's Nth event reliably maps to its Nth match:
+// games 1-3 = group MD1-3, 4 = R32, 5 = R16, 6 = QF, 7 = SF, 8 = Final.
+const SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260720';
 const EVENT_ODDS = id => `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${id}/competitions/${id}/odds?limit=20`;
+const ROUND_OF = n => n <= 3 ? String(n) : ({4:'R32',5:'R16',6:'QF',7:'SF',8:'F'}[n] || null);
+const IS_KO = md => md != null && !/^[1-3]$/.test(md);
+
+// Unresolved knockout slots appear as events with PLACEHOLDER competitors (abbreviation "RD32",
+// "TBD", etc.) — not empty, so they'd otherwise inflate the per-team game ordinal and produce
+// bogus matchups. Only count/record games between two REAL teams. The valid set is derived from
+// index.html's own KICKOFFS keys ("MEX_1":...) so it stays in sync with the 48-team field.
+function validTeamSet(){
+  try {
+    const h = fs.readFileSync(INDEX, 'utf8');
+    const s = new Set([...h.matchAll(/"([A-Z]{3})_[123]":/g)].map(m => m[1]));
+    return s.size >= 32 ? s : null;
+  } catch { return null; }
+}
+const VALID_TEAMS = validTeamSet();
+const isRealTeam = ab => ab ? (VALID_TEAMS ? VALID_TEAMS.has(ab) : /^[A-Z]{3}$/.test(ab)) : false;
 
 const americanToProb = a => a < 0 ? (-a) / (-a + 100) : 100 / (a + 100);
 const devig = probs => { const s = probs.reduce((a,b)=>a+b,0); return probs.map(p=>p/s); };
@@ -96,20 +115,45 @@ function dumpShapeOnce(label, obj){
 // reality from CI logs (this repo's dev sandbox cannot reach ESPN directly).
 async function probe(){
   const sb = await getJSON(SCOREBOARD);
-  const e = sb.events?.[2] || sb.events?.[0];
-  if(!e) throw new Error('no events');
-  console.log(`[probe] event ${e.id}: ${e.name}`);
+  const events = (sb.events || []).slice().sort((x,y)=>Date.parse(x.date||0)-Date.parse(y.date||0));
+  if(!events.length) throw new Error('no events');
+
+  // Replay the ordinal→round mapping so CI logs show whether knockouts are ingested correctly.
+  const gameNo = {}; const byRound = {}; const koMatchups = []; const realEvents = [];
+  for(const ev of events){
+    const c = ev.competitions?.[0]; if(!c) continue;
+    const h = c.competitors?.find(x=>x.homeAway==='home')?.team?.abbreviation;
+    const a = c.competitors?.find(x=>x.homeAway==='away')?.team?.abbreviation;
+    if(!isRealTeam(h) || !isRealTeam(a)) continue;   // skip unresolved placeholder fixtures
+    gameNo[h]=(gameNo[h]||0)+1; gameNo[a]=(gameNo[a]||0)+1;
+    const round = ROUND_OF(gameNo[h]);
+    byRound[round] = (byRound[round]||0)+1;
+    realEvents.push(ev);
+    if(IS_KO(round)) koMatchups.push(`${round}: ${h} v ${a} @ ${ev.date}`);
+  }
+  console.log(`[probe] ${events.length} events (${realEvents.length} real-vs-real); games per round:`, JSON.stringify(byRound));
+  console.log(`[probe] knockout matchups detected (${koMatchups.length}):`);
+  koMatchups.forEach(m=>console.log('   ', m));
+
+  // Dump odds shapes for the LAST real-matchup event (most likely an upcoming/priced KO game).
+  const e = realEvents[realEvents.length-1];
+  if(!e){ console.log('[probe] no real-team events to sample odds from'); return; }
+  console.log(`[probe] sampling odds for event ${e.id}: ${e.name} @ ${e.date}`);
   const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${e.id}/competitions/${e.id}`;
-  const items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items);
+  let items = [];
+  try { items = await deref((await getJSON(EVENT_ODDS(e.id)))?.items); }
+  catch(err){ console.log(`[probe] no odds for this event (${err.message}) — expected for unpriced rounds`); return; }
   const it = items[0];
   console.log(`[probe] provider ${it?.provider?.name} (${it?.provider?.id}); homeTeam $ref: ${it?.homeTeamOdds?.team?.$ref}; awayTeam $ref: ${it?.awayTeamOdds?.team?.$ref}`);
   const pid = it?.provider?.id ?? 100;
   const all = [];
-  for(let page=1; page<=5; page++){
-    const pj = await getJSON(`${base}/odds/${pid}/propBets?limit=200&page=${page}`);
-    all.push(...(pj.items||[]));
-    if(all.length >= (pj.count||0)) break;
-  }
+  try {
+    for(let page=1; page<=5; page++){
+      const pj = await getJSON(`${base}/odds/${pid}/propBets?limit=200&page=${page}`);
+      all.push(...(pj.items||[]));
+      if(all.length >= (pj.count||0)) break;
+    }
+  } catch(err){ console.log(`[probe] propBets unavailable (${err.message}) — round likely unpriced`); }
   console.log(`[probe] fetched ${all.length} props`);
   const byType = {};
   for(const p of all){
@@ -137,18 +181,29 @@ async function main(){
 
   const XG = {};      // team -> md -> {teamXG, oppXG, opp, total, home, pWin, pDraw}
   const MKT = {};     // team -> md -> {opp, home, cs, btts, opp_cs, xg, opp_xg}
-  const teamGameNo = {};   // ESPN scoreboard is date-ordered; bucket each team's fixtures into MD 1..3
+  const KO = {};      // team -> round -> {opp, home, kickoff} — the resolved knockout bracket
+  const teamGameNo = {};   // ESPN scoreboard is date-ordered; a team's Nth event = its Nth match
+
+  // Events must be processed in chronological order for the ordinal→round mapping to hold.
+  events.sort((x,y)=>Date.parse(x.date||0) - Date.parse(y.date||0));
 
   for(const e of events){
     const comp = e.competitions?.[0]; if(!comp) continue;
     const comps = comp.competitors || [];
     const home = comps.find(c=>c.homeAway==='home');
     const away = comps.find(c=>c.homeAway==='away');
-    if(!home?.team?.abbreviation || !away?.team?.abbreviation) continue;
-    const h = home.team.abbreviation, a = away.team.abbreviation;
+    // Skip unresolved knockout slots (placeholder competitors like "RD32"/"TBD") — counting them
+    // would corrupt the game ordinal and emit bogus matchups. They resolve in a later refresh.
+    const h = home?.team?.abbreviation, a = away?.team?.abbreviation;
+    if(!isRealTeam(h) || !isRealTeam(a)) continue;
     teamGameNo[h] = (teamGameNo[h]||0)+1; teamGameNo[a] = (teamGameNo[a]||0)+1;
-    const mdH = teamGameNo[h], mdA = teamGameNo[a];
-    if(mdH > 3 || mdA > 3) continue;   // group stage only
+    const mdH = ROUND_OF(teamGameNo[h]), mdA = ROUND_OF(teamGameNo[a]);
+    if(mdH == null || mdA == null) continue;   // beyond the Final / unexpected ordinal
+
+    // Capture the knockout bracket (matchup + kickoff) regardless of whether odds are priced yet —
+    // the in-app KNOCKOUTS block drives detection/opponent lookup even before bookies price a round.
+    if(IS_KO(mdH)) (KO[h] = KO[h] || {})[mdH] = {opp:a, home:true,  kickoff:e.date};
+    if(IS_KO(mdA)) (KO[a] = KO[a] || {})[mdA] = {opp:h, home:false, kickoff:e.date};
 
     // --- odds item: core endpoint (carries team $refs, two-sided totals, propBets) ---
     let pHome, pDraw, pAway, oddsItem = null;
@@ -252,18 +307,6 @@ async function main(){
     }
   }
 
-  // SANITY GATE — never patch with thin data; the baked snapshot stays in place instead.
-  const nXG = Object.keys(XG).length, nMKT = Object.keys(MKT).length;
-  console.log(`[refresh-odds] coverage: ${nXG} teams with devigged moneyline, ${nMKT} teams with props`);
-  if(nXG < 16){
-    // Expected once the group stage ends: finished games drop their odds and knockout games
-    // fall outside the date window (the model uses Elo for knockouts, not bookmaker odds).
-    // Exit cleanly so the scheduled job stays green instead of alarming — keep the last snapshot.
-    console.log(`[refresh-odds] only ${nXG} teams with fresh moneyline (need ≥16) — likely between matchdays or into the knockouts. Keeping the last good snapshot; nothing to update. (not a failure)`);
-    return;
-  }
-
-  const today = new Date().toISOString().slice(0,10);
   const ser = obj => {
     const keys = Object.keys(obj).sort();
     if(keys.length === 0) throw new Error('refusing to serialize empty odds block');
@@ -274,27 +317,46 @@ async function main(){
     }).join(',\n') + ',\n};';
   };
 
-  const xgBlock  = `const BOOKIE_XG = ${ser(XG)}`;
-  const mktBlock = nMKT > 0 ? `const BOOKIE_MARKETS = ${ser(MKT)}` : null;
+  const nXG = Object.keys(XG).length, nMKT = Object.keys(MKT).length, nKO = Object.keys(KO).length;
+  console.log(`[refresh-odds] coverage: ${nXG} teams w/ moneyline, ${nMKT} w/ props, ${nKO} w/ knockout bracket`);
+
+  // The knockout BRACKET refreshes independently of the odds gate — matchups + kickoffs are known
+  // (and worth committing so the app advances past MD3) even when bookies haven't priced the round.
+  const koBlock = nKO > 0 ? `const KNOCKOUTS = ${ser(KO)}` : null;
+
+  // SANITY GATE for the ODDS blocks only — never overwrite a good snapshot with thin data. Fewer
+  // teams play deep into the knockouts (QF=8, SF=4, F=2), so the floor relaxes once KO games exist.
+  const oddsFloor = nKO > 0 ? 2 : 16;
+  const oddsThin = nXG < oddsFloor;
+  if(oddsThin) console.log(`[refresh-odds] only ${nXG} teams with fresh moneyline (need ≥${oddsFloor}) — keeping the last odds snapshot. (not a failure)`);
+  if(oddsThin && !koBlock){
+    console.log('[refresh-odds] nothing to update.');
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0,10);
+  const xgBlock  = oddsThin ? null : `const BOOKIE_XG = ${ser(XG)}`;
+  const mktBlock = (!oddsThin && nMKT > 0) ? `const BOOKIE_MARKETS = ${ser(MKT)}` : null;
 
   // self-validate generated JS before touching index.html
-  new Function(xgBlock);
+  if(xgBlock) new Function(xgBlock);
   if(mktBlock) new Function(mktBlock);
+  if(koBlock) new Function(koBlock);
 
   if(!APPLY){
     console.log(`// generated ${today} — dry run (use --apply to patch index.html)\n`);
-    console.log(xgBlock + '\n');
-    if(mktBlock) console.log(mktBlock);
+    if(xgBlock) console.log(xgBlock + '\n');
+    if(mktBlock) console.log(mktBlock + '\n');
+    if(koBlock) console.log(koBlock);
     return;
   }
 
   let html = fs.readFileSync(INDEX, 'utf8');
-  const swaps = [
-    [/const BOOKIE_SNAPSHOT_DATE = '[^']*';/, `const BOOKIE_SNAPSHOT_DATE = '${today}';`],
-    [/const BOOKIE_XG = \{[\s\S]*?\n\};/, xgBlock],
-  ];
+  const swaps = [[/const BOOKIE_SNAPSHOT_DATE = '[^']*';/, `const BOOKIE_SNAPSHOT_DATE = '${today}';`]];
+  if(xgBlock)  swaps.push([/const BOOKIE_XG = \{[\s\S]*?\n\};/, xgBlock]);
   if(mktBlock) swaps.push([/const BOOKIE_MARKETS = \{[\s\S]*?\n\};/, mktBlock]);
-  else console.warn('[refresh-odds] no prop markets parsed — keeping existing BOOKIE_MARKETS snapshot');
+  else if(!oddsThin) console.warn('[refresh-odds] no prop markets parsed — keeping existing BOOKIE_MARKETS snapshot');
+  if(koBlock)  swaps.push([/const KNOCKOUTS = \{[\s\S]*?\n\};/, koBlock]);
   for(const [re, repl] of swaps){
     if(!re.test(html)) throw new Error(`marker not found: ${re}`);
     html = html.replace(re, repl);
