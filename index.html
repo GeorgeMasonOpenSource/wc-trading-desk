@@ -306,9 +306,9 @@
 </header>
 
 <nav class="tabs" id="primary-nav">
-  <button data-group="decision" class="active">▶ Decision</button>
-  <button data-group="plan">Plan</button>
-  <button data-group="squad">Squad</button>
+  <button data-group="decision" class="active">▶ My Team</button>
+  <button data-group="plan">AI Transfers</button>
+  <button data-group="squad">AI Team</button>
   <button data-group="insights">Insights</button>
 </nav>
 <nav class="subtabs" id="sub-nav"></nav>
@@ -10367,9 +10367,9 @@ window.renderChipStrategyPanel = renderChipStrategyPanel;
 // Two-tier navigation: 4 primary groups, each with contextual sub-tabs. The old flat tab ids
 // are preserved as the page ids/data-tabs, so switchTab(<tab>) still works everywhere.
 const NAV_GROUPS = {
-  decision: { label:'Decision', tabs:[['dashboard','Decision Desk']] },
-  plan:     { label:'Plan',     tabs:[['transfers','Transfers'],['captaincy','Captaincy'],['chips','Chips']] },
-  squad:    { label:'Squad',    tabs:[['optimizer','Optimizer'],['players','Player Explorer']] },
+  decision: { label:'My Team', tabs:[['dashboard','My Team']] },
+  plan:     { label:'AI Transfers', tabs:[['transfers','Transfers'],['captaincy','Captaincy'],['chips','Chips']] },
+  squad:    { label:'AI Team',  tabs:[['optimizer','Optimised XI'],['players','Player Explorer']] },
   insights: { label:'Insights', tabs:[['performance','Performance'],['minutes','Minutes Lab'],['fdr','Fixture Difficulty'],['diff','Differential Edge'],['alerts','Mins Alerts'],['model','Model Lab']] },
 };
 function groupOfTab(t){ return Object.keys(NAV_GROUPS).find(g=>NAV_GROUPS[g].tabs.some(([tab])=>tab===t)) || 'decision'; }
