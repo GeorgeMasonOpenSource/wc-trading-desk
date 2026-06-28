@@ -4482,6 +4482,7 @@ function narrateSquad(squadIds, md){
   if(!squadIds || squadIds.length === 0) return [];
   const squad = squadIds.map(id=>PLAYER_BY_ID[id]);
   const story = [];
+  const isKO = !/^[1-3]$/.test(String(md));
 
   // What the optimizer ACTUALLY revealed about the data
   const teamCounts = {}; squad.forEach(p=>teamCounts[p.team] = (teamCounts[p.team]||0)+1);
@@ -4489,9 +4490,15 @@ function narrateSquad(squadIds, md){
   const topTeam = sortedTeams[0];
   if(topTeam && topTeam[1] >= 3){
     const t = TEAMS[topTeam[0]];
-    const gd = _groupDifficulty(topTeam[0]);
-    if(gd.edge > 150){
-      story.push(`<b>Stacking ${t.name} (max 3/country)</b> — the model picks ${topTeam[1]} players because <b>${t.name}'s group is the softest path</b> for a top-Elo side (Elo edge +${gd.edge.toFixed(0)} vs avg opponent). The defenders (Elo ${t.def}, conceding ~${(1.30 * gd.opponents.reduce((a,o)=>a+TEAMS[o.code]?.att||75,0)/gd.opponents.length / t.def).toFixed(2)} xGA/match) are the cheapest path to multiple CS bonuses in the tournament.`);
+    if(isKO){
+      // Knockout rationale is about TOURNAMENT SURVIVAL, not group difficulty.
+      const surv = computeSurvival(topTeam[0]);
+      story.push(`<b>Stacking ${t.name} (max ${CAP_ALLOC[md]||3}/country at ${MD_LABEL(md)})</b> — concentrating on a team the model expects to <b>go deep</b> (reach SF ~${((surv.SF||0)*100).toFixed(0)}%, win it ~${((surv.F||0)*50).toFixed(0)}%). With limited knockout transfers, players who survive multiple rounds compound points you can't easily replace.`);
+    } else {
+      const gd = _groupDifficulty(topTeam[0]);
+      if(gd.edge > 150){
+        story.push(`<b>Stacking ${t.name} (max 3/country)</b> — the model picks ${topTeam[1]} players because <b>${t.name}'s group is the softest path</b> for a top-Elo side (Elo edge +${gd.edge.toFixed(0)} vs avg opponent). The defenders (Elo ${t.def}, conceding ~${(1.30 * gd.opponents.reduce((a,o)=>a+TEAMS[o.code]?.att||75,0)/gd.opponents.length / t.def).toFixed(2)} xGA/match) are the cheapest path to multiple CS bonuses in the tournament.`);
+      }
     }
   }
 
@@ -4515,9 +4522,10 @@ function narrateSquad(squadIds, md){
     story.push(`<b>Captain pick: ${c1.p.name}</b> (${c1.x.toFixed(1)} xPts ${MD_LABEL(md)}) vs ${c2.p.name} (${c2.x.toFixed(1)}). Edge of ${delta.toFixed(1)} pts ≈ ${(delta*2).toFixed(1)} after doubling. Driver: ${fx1?`${c1.p.team} vs ${fx1.opp.name} projects ${fx1.teamXG.toFixed(2)} xG`:'team-strength edge'}${fx2?`, vs ${c2.p.team} vs ${fx2.opp.name} ${fx2.teamXG.toFixed(2)} xG`:''}.`);
   }
 
-  // What's NOT in the squad (the omission story)
+  // What's NOT in the squad (the omission story) — group-stage only; this rationale is about
+  // group fixtures and is stale in the knockouts (and the team may already be eliminated).
   const haaland = PLAYERS.find(p=>p.name==='Erling Haaland');
-  if(haaland && !squadIds.includes(haaland.id)){
+  if(!isKO && haaland && !squadIds.includes(haaland.id)){
     const haalHor = projectHorizon(haaland, 3).total;
     story.push(`<b>Notable omission: Haaland</b> ($${haaland.price}m, ${haalHor.toFixed(1)} xPts h3). Model prefers other premiums because Norway in Group I faces France + Senegal — projected xG is lower than France's path. The data is saying: pay premium prices for premium fixtures, not premium names.`);
   }
@@ -4563,12 +4571,18 @@ function narrateCaptain(captainId, md, precomputed){
   const assistShare = r.components.assists || 0;
   const otherShares = (r.components.tackles||0) + (r.components.chances||0) + (r.components.sot||0) + (r.components.penWon||0);
   lines.push(`<b>Where the xPts comes from:</b> ${goalShare.toFixed(1)} from goal threat${p.pt>=0.7?' (incl. PKs)':''}, ${assistShare.toFixed(1)} from assists${otherShares>0.3?', '+otherShares.toFixed(1)+' from secondary scoring (tackles/chances/SOT/pen-won)':''}.`);
-  // Rank vs alternatives
+  // Global rank (for context) + the next-best captain WITHIN YOUR SQUAD, excluding the captain
+  // himself (the old code compared to the global #2, which is the captain when he's globally #2 —
+  // producing "next-best: <same player>").
   const allCap = PLAYERS.map(q=>({q, x:projectXPts(q,md)?.xpts||0})).filter(c=>c.x>0).sort((a,b)=>b.x-a.x);
   const rank = allCap.findIndex(c=>c.q.id===p.id) + 1;
-  const c2 = allCap[1];
+  const squadAlts = (typeof STATE !== 'undefined' ? STATE.squad : []).map(id=>PLAYER_BY_ID[id])
+    .filter(q=>q && q.id !== p.id)
+    .map(q=>({q, x:projectXPts(q,md)?.xpts||0})).sort((a,b)=>b.x-a.x);
+  const c2 = squadAlts[0];
   const delta = xPtsMD - (c2?.x || 0);
-  lines.push(`<b>Ranked #${rank} of 1,454 players</b> in ${MD_LABEL(md)} xPts. Next-best captain: <b>${c2?.q.name}</b> (${(c2?.x||0).toFixed(1)} xPts). Edge of <b class="mono">${delta.toFixed(1)}</b> = <b class="good">+${(delta*2).toFixed(1)}</b> captain EV swing.`);
+  if(c2) lines.push(`<b>Ranked #${rank} of 1,454 players</b> in ${MD_LABEL(md)} xPts. Next-best captain in your squad: <b>${c2.q.name}</b> (${c2.x.toFixed(1)} xPts). Edge of <b class="mono">${delta.toFixed(1)}</b> = <b class="good">+${(delta*2).toFixed(1)}</b> captain EV swing.`);
+  else lines.push(`<b>Ranked #${rank} of 1,454 players</b> in ${MD_LABEL(md)} xPts.`);
   return lines.join('<br>');
 }
 
@@ -4619,6 +4633,23 @@ function refresh(){
 }
 
 // ---------- RENDERING ----------
+// Round-aware transfer recommendation for the Recommended-Action list (replaces a hardcoded "roll"
+// stub that wrongly said "roll" even at R32, where transfers are unlimited).
+function _transferRecHtml(md){
+  const sq = STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean);
+  const bank = STATE.budget - sq.reduce((a,p)=>a+p.price,0);
+  const alloc = FT_ALLOC[md];
+  if(alloc == null || alloc >= 99){
+    return `<div class="rec"><div><div class="title">Transfers — free rebuild</div><div class="sub">${MD_LABEL(md)} allows <b>unlimited transfers</b>. Re-optimise the whole squad in <a onclick="switchTab('optimizer')">Squad</a> (country cap ${CAP_ALLOC[md]||3}/team, +$5m budget at knockouts) — no points hit.</div></div><div class="ev good">rebuild</div></div>`;
+  }
+  let move = null;
+  try { move = _findBestSingleTransfer(STATE.squad, [md], bank, CAP_ALLOC[md]||3); } catch {}
+  if(move && move.delta > 0.8){
+    const o = PLAYER_BY_ID[move.outId], inp = PLAYER_BY_ID[move.inId];
+    return `<div class="rec"><div><div class="title">Transfer: ${o?.name} → ${inp?.name}</div><div class="sub">+${move.delta.toFixed(1)} xPts at ${MD_LABEL(md)} · net ${move.netCost>=0?'+':''}$${move.netCost.toFixed(1)}m · ${alloc} free transfer${alloc>1?'s':''} this round (free within allowance).</div></div><div class="ev good">+${move.delta.toFixed(1)}</div></div>`;
+  }
+  return `<div class="rec"><div><div class="title">Transfers — hold / roll</div><div class="sub">No single move clears +0.8 xPts at ${MD_LABEL(md)}. You have ${alloc} free transfer${alloc>1?'s':''} — save ${alloc>1?'them':'it'}.</div></div><div class="ev">hold</div></div>`;
+}
 // THIS ROUND'S DIRECTIVE — one banner answering "what do I do now": chip call, transfer call
 // (within the round's free allowance), captain, and the deadline. Built from the same engines the
 // detail panels use (computeOptimalChipPlan, _findBestSingleTransfer, chooseXI). Each cell is
@@ -4724,13 +4755,7 @@ function renderDashboard(){
         </div>
         <div class="ev">${STATE.squad.length<15?'—':'OK'}</div>
       </div>
-      <div class="rec">
-        <div>
-          <div class="title">Transfer recommendation</div>
-          <div class="sub">No action clears 1.5 EV hit threshold for ${MD_LABEL(md)}. Roll free transfer → ${STATE.squad.length<15?'(after squad is filled)':'next MD'}.</div>
-        </div>
-        <div class="ev">roll<span class="conf">below threshold</span></div>
-      </div>
+      ${_transferRecHtml(md)}
       <details open style="margin-top:10px">
         <summary>🎯 Why this squad? (strategy narrative)</summary>
         <div style="margin-top:8px">${narrateSquad(STATE.squad, md).map(s=>`<div class="row" style="font-size:12px;align-items:flex-start;gap:6px;margin-bottom:6px"><span style="color:var(--acc);margin-top:2px">▸</span><span>${s}</span></div>`).join('')}</div>
@@ -10311,6 +10336,28 @@ function inferMRI(p, squadPlayers){
   if(price >= 5.0 && own < 1.0) base = Math.min(base, 0.35);
   if(price >= 4.0 && own < 0.5) base = Math.min(base, 0.30);     // catches cheap backups (Adu, Spence)
   if(price >= 4.0 && own < 0.2) base = Math.min(base, 0.20);     // truly ignored
+
+  // ---- REAL MINUTES from the live feed (overrides the ownership heuristic where present) ----
+  // stats.roundPoints is {roundId: points} for COMPLETED rounds. In FIFA scoring a 60+ appearance
+  // is worth ≥2 (2 appearance pts), a sub <60 is ≥1, and a DNP is 0/absent — so the points history
+  // is a direct proxy for who actually STARTS. This is what fixes "model suggests players who don't
+  // play" (e.g. a backup GK who hasn't featured, a forward who's been benched).
+  const rp = p.stats && p.stats.roundPoints;
+  if(rp && typeof rp === 'object'){
+    const vals = Object.keys(rp).map(k=>rp[k]).filter(v=>v != null);
+    if(vals.length >= 2){
+      const startRate = vals.filter(v=>v>=2).length / vals.length;   // ≥2 pts ≈ started 60+
+      const featRate  = vals.filter(v=>v>=1).length / vals.length;   // ≥1 pt  ≈ featured at all
+      const obs = startRate>=0.66 ? 0.90 : startRate>=0.34 ? 0.62 : featRate>=0.5 ? 0.45 : 0.18;
+      const w = Math.min(0.85, 0.45 + 0.13*vals.length);             // trust real data more with more games
+      base = w*obs + (1-w)*base;
+    }
+  }
+  // Availability: only act on recognised unavailable/doubtful statuses (don't guess on unknowns).
+  const st = (p.status || '').toLowerCase();
+  if(/injur|suspend|unavail|\bout\b|ban/.test(st)) base = Math.min(base, 0.05);
+  else if(/doubt|question|gtd/.test(st)) base = Math.min(base, 0.45);
+
   return Math.round(base*100)/100;
 }
 function playerShares(p, posMax){

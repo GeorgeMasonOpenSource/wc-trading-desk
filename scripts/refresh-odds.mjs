@@ -375,8 +375,8 @@ async function probePlayers(){
   console.log('[probe-players] player[0] keys:', Object.keys(arr[0]).join(', '));
   console.log('[probe-players] player[0]:', JSON.stringify(arr[0]).slice(0, 900));
   // the most-pointed player has definitely played → richest stats sample
-  const withTot = arr.map(p => ({p, tot:(p.stats?.roundPoints||[]).reduce((a,b)=>a+(b||0),0)}))
-                     .sort((a,b)=>b.tot-a.tot);
+  const sumRp = rp => rp ? Object.values(rp).reduce((a,b)=>a+(b||0),0) : 0;   // roundPoints is {round:pts}
+  const withTot = arr.map(p => ({p, tot:sumRp(p.stats?.roundPoints)})).sort((a,b)=>b.tot-a.tot);
   const top = withTot[0]?.p;
   if(top){
     console.log('[probe-players] top scorer:', top.knownName || top.lastName, 'tot', withTot[0].tot);
