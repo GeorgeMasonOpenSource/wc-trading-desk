@@ -568,6 +568,7 @@
   <div class="panel">
     <h2>Fixture Difficulty — Group Stage</h2>
     <div class="dim" style="margin-bottom:10px">Difficulty scaled 1 (easy) → 5 (brutal) based on opponent attack & defense strength relative to picked team. Home advantage is ≤0.3 (neutralized — neutral venues across NA).</div>
+    <div id="fdr-note"></div>
     <table id="fdr-table" class="mono" style="font-size:11px"></table>
   </div>
 </section>
@@ -4403,7 +4404,7 @@ function narratePick(p, md){
     const delta = peer.mine - peer.x;
     if(Math.abs(delta) > 0.5){
       if(delta > 0){
-        reasons.push({tag:'vs-peer', text:`<b>vs ${peer.peer.name}</b> ($${peer.peer.price.toFixed(1)}m, same position): you project <span class="good">+${delta.toFixed(1)} xPts</span> higher over MD1-3. ${p.team===peer.peer.team?'Same team — model prefers '+p.name+' role.':'Different team — likely fixture/role edge.'}`});
+        reasons.push({tag:'vs-peer', text:`<b>vs ${peer.peer.name}</b> ($${peer.peer.price.toFixed(1)}m, same position): you project <span class="good">+${delta.toFixed(1)} xPts</span> higher over the next 3 rounds. ${p.team===peer.peer.team?'Same team — model prefers '+p.name+' role.':'Different team — likely fixture/role edge.'}`});
       } else {
         reasons.push({tag:'vs-peer', text:`<b>${peer.peer.name}</b> ($${peer.peer.price.toFixed(1)}m) projects <span class="bad">+${(-delta).toFixed(1)}</span> higher — consider as alternative.`});
       }
@@ -4470,7 +4471,7 @@ function narratePick(p, md){
   if(own >= 40){
     reasons.push({tag:'template', text:`<b>Template lock:</b> ${own.toFixed(0)}% ownership. Missing this player means losing rank to ~half the player base if they haul.`});
   } else if(own < 5 && hor >= 16){
-    reasons.push({tag:'diff-edge', text:`<b>Differential edge:</b> ${own.toFixed(1)}% owned despite projecting ${hor.toFixed(1)} xPts over MD1-3. Mini-league climb pick — outperforms vs the template if they haul.`});
+    reasons.push({tag:'diff-edge', text:`<b>Differential edge:</b> ${own.toFixed(1)}% owned despite projecting ${hor.toFixed(1)} xPts over the next 3 rounds. Mini-league climb pick — outperforms vs the template if they haul.`});
   }
 
   // === 9. SET-PIECE / PENALTY ECONOMICS ===
@@ -4535,14 +4536,17 @@ function narrateSquad(squadIds, md){
   if(premium.length >= 5){
     // Find which premium has highest expected value
     const bestPrem = premium.map(p=>({p, x:projectHorizon(p,3).total})).sort((a,b)=>b.x-a.x)[0];
-    story.push(`<b>5+ premiums means committing $${premiumSpend.toFixed(1)}m to the top tier.</b> The data justifies this: the gap from the #5 premium (${bestPrem.p.name}-tier) to the #15 mid-tier player is ${(bestPrem.x - projectHorizon(squad.find(s=>s.price<7&&s.price>=5)||squad[0],3).total).toFixed(1)} xPts over MD1-3. That's a ~2x multiplier on $-per-xPts. Premium spread captures it.`);
+    story.push(`<b>5+ premiums means committing $${premiumSpend.toFixed(1)}m to the top tier.</b> The data justifies this: the gap from the #5 premium (${bestPrem.p.name}-tier) to the #15 mid-tier player is ${(bestPrem.x - projectHorizon(squad.find(s=>s.price<7&&s.price>=5)||squad[0],3).total).toFixed(1)} xPts over the next 3 rounds. That's a ~2x multiplier on $-per-xPts. Premium spread captures it.`);
   }
 
-  // Captain narrative
+  // Captain narrative — lead with the canonical captain (STATE.captainId) when narrating the live
+  // squad, so this matches the card/directive/pitch; next-best is the runner-up in the XI.
   const xi = chooseXI(squad.map(p=>({...p, xptsHor:projectHorizon(p,3).total})));
   const capCands = xi.map(p=>({p, x:projectXPts(p,md)?.xpts||0})).sort((a,b)=>b.x-a.x);
   if(capCands.length >= 2){
-    const c1 = capCands[0], c2 = capCands[1];
+    const capP = (STATE.captainId && squadIds.includes(STATE.captainId)) ? PLAYER_BY_ID[STATE.captainId] : null;
+    const c1 = capP ? {p:capP, x:projectXPts(capP,md)?.xpts||0} : capCands[0];
+    const c2 = capCands.find(c=>c.p.id!==c1.p.id) || capCands[1];
     const delta = c1.x - c2.x;
     const fx1 = _opponentInfo(c1.p, md);
     const fx2 = _opponentInfo(c2.p, md);
@@ -4650,12 +4654,29 @@ const STATE = {
   squadSource: 'optimizer',   // 'optimizer' (model suggestion) | 'user' (imported/saved real team)
 };
 
+// SINGLE SOURCE OF TRUTH for the recommended XI + captain. Computed ONCE per refresh so the
+// directive, the Recommended-Action card, the squad narrative, the pitch and the action plan all
+// show the SAME captain/XI — previously each recomputed independently (some selecting the XI by
+// 3-MD horizon, others by single-MD xPts), which could surface different captains on one screen.
+function computeRecommendation(){
+  const md = STATE.md;
+  const squad = STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean)
+    .map(p=>({...p, xptsMD: projectXPts(p,md)?.xpts || 0, xptsHor: projectHorizon(p,3).total}));
+  if(squad.length < 1){ STATE.captainId = STATE.viceId = null; STATE._recXIIds = []; STATE._recCapXpts = 0; return; }
+  const xi = chooseXI(squad, 'xptsMD').filter(Boolean);
+  const ranked = [...xi].sort((a,b)=>b.xptsMD - a.xptsMD);
+  STATE.captainId   = ranked[0]?.id ?? null;
+  STATE.viceId      = ranked[1]?.id ?? null;
+  STATE._recXIIds   = xi.map(p=>p.id);
+  STATE._recCapXpts = ranked[0]?.xptsMD ?? 0;
+}
 function refresh(){
   document.getElementById('conn-md').value = STATE.md;
   const spend = STATE.squad.reduce((a,id)=>a + PLAYER_BY_ID[id].price, 0);
   document.getElementById('conn-spend').textContent = '$'+spend.toFixed(1)+'m';
   document.getElementById('conn-squad').textContent = STATE.squad.length+'/15';
   document.getElementById('conn-budget').textContent = '$'+STATE.budget.toFixed(1)+'m';
+  computeRecommendation();   // canonical captain/XI before any panel renders
   renderAll();
 }
 
@@ -4693,13 +4714,12 @@ function renderDirective(){
   let dlStr = '';
   try { const d = detectCurrentMd && detectCurrentMd(); if(d && d.first) dlStr = `deadline ${new Date(d.first).toLocaleString([], {weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}`; } catch {}
 
-  // captain
+  // captain — canonical pick from computeRecommendation() (same everywhere on screen)
   let capCell = `<div class="dcell"><div class="k">🅒 Captain</div><div class="v">—</div></div>`;
-  try {
-    const xi = chooseXI(sq.map(p=>({...p, xptsHor:projectHorizon(p,3).total})));
-    const top = xi.map(p=>({p, x:projectXPts(p,md)?.xpts||0})).sort((a,b)=>b.x-a.x)[0];
-    if(top) capCell = `<div class="dcell act"><div class="k">🅒 Captain</div><div class="v">${top.p.name}</div><div class="s">${top.p.team} · ${top.x.toFixed(1)} xPts → <b class="good">${(top.x*2).toFixed(1)}</b> doubled</div></div>`;
-  } catch {}
+  const capP = STATE.captainId && PLAYER_BY_ID[STATE.captainId];
+  if(capP){ const cx = STATE._recCapXpts || projectXPts(capP, md)?.xpts || 0;
+    capCell = `<div class="dcell act"><div class="k">🅒 Captain</div><div class="v">${capP.name}</div><div class="s">${capP.team} · ${cx.toFixed(1)} xPts → <b class="good">${(cx*2).toFixed(1)}</b> doubled</div></div>`;
+  }
 
   // transfers — round's free allowance + best single move at the current round
   let tCell;
@@ -4764,7 +4784,10 @@ function renderDashboard(){
       return {...p, xptsMD: _r?.xpts || 0, _fullProj: _r};
     });
     projXi.sort((a,b)=>b.xptsMD - a.xptsMD);
-    const cap = projXi[0];
+    // Captain = the canonical pick from computeRecommendation() so this card matches the directive,
+    // narrative and pitch exactly. (safeCap/aggCap below remain alternative lenses by design.)
+    const _capP = STATE.captainId && PLAYER_BY_ID[STATE.captainId];
+    const cap = _capP ? (()=>{ const _r = projectXPts(_capP, md); return {..._capP, xptsMD:_r?.xpts||0, _fullProj:_r}; })() : projXi[0];
     const safeCap = projXi.find(p=>p.own>=0.20) || cap;
     const aggCap = cap ? (projXi.find(p=>p.own<0.10 && p.xptsMD > cap.xptsMD*0.7) || cap) : null;
     recList.innerHTML = srcBanner + `
@@ -5368,7 +5391,7 @@ function renderPlayers(){
       <th data-col="pos">Pos</th>
       <th data-col="price" class="num">Price</th>
       <th data-col="xptsMD" class="num">xPts ${MD_LABEL(md)}</th>
-      <th data-col="xptsHor" class="num">xPts MD1-3</th>
+      <th data-col="xptsHor" class="num">xPts (next 3)</th>
       <th data-col="value" class="num">Value</th>
       <th data-col="own" class="num">Own%</th>
       <th data-col="mri" class="num">MRI</th>
@@ -5438,14 +5461,18 @@ function fdrColor(s){
 }
 function renderFDR(){
   const tbl = document.getElementById('fdr-table');
+  const note = document.getElementById('fdr-note');
+  if(note) note.innerHTML = /^[1-3]$/.test(String(STATE.md)) ? ''
+    : '<div class="dim" style="margin-bottom:8px"><span class="warn">●</span> Fixture difficulty is a group-stage tool — the group MD1-3 matchups below are shown for reference. Knockout matchups are single-elimination (see the Decision desk for the live R32+ bracket).</div>';
   const rows = Object.keys(TEAMS).sort((a,b)=>TEAMS[b].elo-TEAMS[a].elo);
   tbl.innerHTML = `
     <thead><tr><th>Team</th><th>Grp</th><th class="num">Elo</th><th>MD1</th><th>MD2</th><th>MD3</th><th class="num">Avg</th></tr></thead>
     <tbody>${rows.map(code=>{
       const t = TEAMS[code];
       const cells = [1,2,3].map(md=>{
-        const f = FIXTURES[code][md];
-        const opp = TEAMS[f.opp];
+        const f = FIXTURES[code] && FIXTURES[code][md];
+        const opp = f && TEAMS[f.opp];
+        if(!f || !opp) return {opp:'—', s:0};
         const s = fdrScore(code, opp.def, opp.att, f.home);
         return {opp:f.opp, s};
       });
