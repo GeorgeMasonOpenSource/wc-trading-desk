@@ -10321,6 +10321,42 @@ function prefillImportBox(){
 }
 window.importSquadFromText = importSquadFromText;
 
+// ---------- DEFAULT "MY TEAM" (baked owner squad) ----------
+// The owner's actual official-game R32 squad, so a fresh device loads HIS team by default instead of
+// the optimizer's suggestion. Resolved BY NAME via resolvePlayerName (robust to FIFA id drift across
+// the live feed vs the baked snapshot). Only seeds first-time/empty state — any import, transfer, or
+// save overwrites it through the normal autosave path, so it never fights a user's own team.
+const DEFAULT_MY_TEAM = {
+  names: ['Matt Freese','Raúl Rangel','Facundo Medina','Marc Cucurella','Ezri Konsa','Rúben Dias',
+          'Lisandro Martínez','Jude Bellingham','Florian Wirtz','Ousmane Dembélé','Vinícius Júnior',
+          'Granit Xhaka','Kylian Mbappé','Harry Kane','Lionel Messi'],
+  captain: 'Facundo Medina', vice: 'Florian Wirtz', chipsUsed: [], bank: 0.4, free: 2,
+};
+function loadDefaultMyTeam(){
+  if(typeof resolvePlayerName !== 'function') return false;
+  const ids = [];
+  for(const nm of DEFAULT_MY_TEAM.names){
+    const r = resolvePlayerName(nm);
+    if(r && !r.ambiguous && r.p && !ids.includes(r.p.id)) ids.push(r.p.id);
+  }
+  if(ids.length < 11) return false;   // resolution failed — leave the optimizer suggestion in place
+  STATE.squad = ids;
+  STATE.squadSource = 'user';
+  STATE.budget = (STATE.md && !/^[1-3]$/.test(STATE.md)) ? 105 : 100;   // +$5m at knockouts
+  const cap = resolvePlayerName(DEFAULT_MY_TEAM.captain), vc = resolvePlayerName(DEFAULT_MY_TEAM.vice);
+  STATE.captainId = (cap && !cap.ambiguous && cap.p) ? cap.p.id : null;
+  STATE.viceId    = (vc && !vc.ambiguous && vc.p) ? vc.p.id : null;
+  STATE.chipsUsed = DEFAULT_MY_TEAM.chipsUsed.slice();
+  // seed the My Team baseline + import-form memory so Save/Reset and the import box reflect it
+  try {
+    localStorage.setItem('wctd_myteam', JSON.stringify({squad:[...ids], captainId:STATE.captainId,
+      viceId:STATE.viceId, chipsUsed:[...STATE.chipsUsed], bank:DEFAULT_MY_TEAM.bank, free:DEFAULT_MY_TEAM.free, savedAt:Date.now()}));
+    localStorage.setItem('wctd_import', JSON.stringify({text:DEFAULT_MY_TEAM.names.join('\n'),
+      bank:String(DEFAULT_MY_TEAM.bank), free:String(DEFAULT_MY_TEAM.free), chips:[...DEFAULT_MY_TEAM.chipsUsed]}));
+  } catch {}
+  return true;
+}
+
 // ---------- "MY TEAM" BASELINE (save / plan / reset) ----------
 // The baseline is your committed real squad. Planning tweaks (transfers, MD stepping) live on a
 // working copy in STATE; Reset reverts to the baseline, Save overwrites it with the current squad.
@@ -10798,6 +10834,10 @@ async function bootstrap(){
   if(det) STATE.md = det.md;
   const cm = document.getElementById('conn-md'); if(cm) cm.value = STATE.md;
   updateMdBanner();
+  // First-time visitor with nothing restored (fresh device / cleared storage) → seed the owner's
+  // baked squad as their team, not the optimizer's. Persists via autosave so reloads restore it the
+  // normal way; any edit/import overwrites it. Skipped entirely once a real squad has been restored.
+  if(STATE.squad.length === 0 && loadDefaultMyTeam() && typeof autoSaveCurrent === 'function') autoSaveCurrent();
   // Run the optimizer so the Optimizer tab is populated, but ONLY adopt its XV as the active
   // squad for a first-time visitor with no team of their own. If the user has imported/saved a
   // squad (restored above), that is THEIR team — never overwrite it with the optimizer's.
