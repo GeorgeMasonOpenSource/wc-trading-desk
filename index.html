@@ -175,6 +175,19 @@
   details[open] summary{color:var(--ink);margin-bottom:6px}
   /* match-day tool accordions on the Decision page */
   .section-label{font-size:12px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink3);margin:0 0 10px 2px}
+  /* this-round directive banner */
+  .directive-card{background:linear-gradient(135deg,rgba(62,224,160,.12),rgba(106,169,255,.08) 60%,transparent),var(--panel);
+    border:1px solid var(--line2);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow)}
+  .directive-card .dh{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .directive-card .dh .rnd{font-size:19px;font-weight:800;letter-spacing:-.3px}
+  .directive-card .dh .dl{font-size:12.5px;color:var(--ink2)}
+  .directive-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .dcell{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:11px;padding:12px 14px;min-width:0}
+  .dcell .k{font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--ink3);display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .dcell .v{font-size:16px;font-weight:700;line-height:1.25;letter-spacing:-.2px}
+  .dcell .s{font-size:11.5px;color:var(--ink2);margin-top:3px;line-height:1.4}
+  .dcell.act{border-color:rgba(62,224,160,.5);background:linear-gradient(180deg,rgba(62,224,160,.08),transparent)}
+  .dcell.hold{opacity:.92}
   details.tool{background:linear-gradient(180deg,rgba(255,255,255,.02),transparent 100px),var(--panel);
     border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow-sm)}
   details.tool>summary{cursor:pointer;font-size:15.5px;font-weight:700;color:var(--ink);list-style:none;display:flex;align-items:center;gap:9px}
@@ -266,6 +279,7 @@
 <!-- DASHBOARD -->
 <section class="page active" id="page-dashboard">
   <div id="renderall-errors"></div>
+  <div id="directive"></div>
   <div class="split2">
     <div class="panel">
       <h2>Recommended Action — <span id="rec-md">MD1</span></h2>
@@ -4589,7 +4603,62 @@ function refresh(){
 }
 
 // ---------- RENDERING ----------
+// THIS ROUND'S DIRECTIVE — one banner answering "what do I do now": chip call, transfer call
+// (within the round's free allowance), captain, and the deadline. Built from the same engines the
+// detail panels use (computeOptimalChipPlan, _findBestSingleTransfer, chooseXI). Each cell is
+// independently guarded so a single failure never blanks the banner.
+function renderDirective(){
+  const el = document.getElementById('directive'); if(!el) return;
+  const md = STATE.md;
+  const sq = STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean);
+  if(sq.length < 11){ el.innerHTML = ''; return; }
+  const spend = sq.reduce((a,p)=>a+p.price,0);
+  const bank = STATE.budget - spend;
+
+  // deadline (first kickoff of the planning round)
+  let dlStr = '';
+  try { const d = detectCurrentMd && detectCurrentMd(); if(d && d.first) dlStr = `deadline ${new Date(d.first).toLocaleString([], {weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}`; } catch {}
+
+  // captain
+  let capCell = `<div class="dcell"><div class="k">🅒 Captain</div><div class="v">—</div></div>`;
+  try {
+    const xi = chooseXI(sq.map(p=>({...p, xptsHor:projectHorizon(p,3).total})));
+    const top = xi.map(p=>({p, x:projectXPts(p,md)?.xpts||0})).sort((a,b)=>b.x-a.x)[0];
+    if(top) capCell = `<div class="dcell act"><div class="k">🅒 Captain</div><div class="v">${top.p.name}</div><div class="s">${top.p.team} · ${top.x.toFixed(1)} xPts → <b class="good">${(top.x*2).toFixed(1)}</b> doubled</div></div>`;
+  } catch {}
+
+  // transfers — round's free allowance + best single move at the current round
+  let tCell;
+  const alloc = FT_ALLOC[md];
+  if(alloc == null || alloc >= 99){
+    tCell = `<div class="dcell act"><div class="k">🔁 Transfers</div><div class="v">Free rebuild</div><div class="s">Unlimited transfers this round — re-optimise in <a onclick="switchTab('optimizer')">Squad</a>, country cap ${CAP_ALLOC[md]||3}/team.</div></div>`;
+  } else {
+    let move = null;
+    try { move = _findBestSingleTransfer(STATE.squad, [md], bank, CAP_ALLOC[md]||3); } catch {}
+    if(move && move.delta > 0.8){
+      const o = PLAYER_BY_ID[move.outId], inp = PLAYER_BY_ID[move.inId];
+      tCell = `<div class="dcell act"><div class="k">🔁 Transfers · ${alloc} free</div><div class="v">${o?.name} → ${inp?.name}</div><div class="s">+${move.delta.toFixed(1)} xPts this round · net ${move.netCost>=0?'+':''}$${move.netCost.toFixed(1)}m. Free within allowance.</div></div>`;
+    } else {
+      tCell = `<div class="dcell hold"><div class="k">🔁 Transfers · ${alloc} free</div><div class="v">Hold / roll</div><div class="s">No single move clears +0.8 xPts. Save the free transfer.</div></div>`;
+    }
+  }
+
+  // chip call for this round
+  let chipCell = `<div class="dcell hold"><div class="k">🎟 Chip</div><div class="v">Hold all chips</div><div class="s">Nothing optimal this round — see Chip Strategy for the full plan.</div></div>`;
+  try {
+    const plan = computeOptimalChipPlan(STATE.squad) || [];
+    const used = STATE.chipsUsed || [];
+    const now = plan.find(c => c.primary === md && !used.includes(c.chip));
+    if(now) chipCell = `<div class="dcell act"><div class="k">🎟 Chip — PLAY NOW</div><div class="v">${now.chip}</div><div class="s">${(now.narrative||'').slice(0,120)}</div></div>`;
+  } catch {}
+
+  el.innerHTML = `<div class="directive-card">
+    <div class="dh"><span class="rnd">▶ ${MD_LABEL(md)} — your move</span><span class="dl">${dlStr}</span></div>
+    <div class="directive-grid">${capCell}${tCell}${chipCell}</div>
+  </div>`;
+}
 function renderDashboard(){
+  try { renderDirective(); } catch(e){ console.warn('[directive]', e.message); }
   document.getElementById('rec-md').textContent = MD_LABEL(STATE.md);
   const recList = document.getElementById('rec-list');
   recList.innerHTML = '';
