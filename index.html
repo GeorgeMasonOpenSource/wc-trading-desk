@@ -3077,8 +3077,19 @@ function teamShareNorm(team){
   };
 }
 
-function projectXPts(p, md){
-  if(p.pos==='GK') return projectGK(p, md);
+// ---------- CALIBRATION (results feedback loop) ----------
+// Per-position multiplicative correction LEARNED from realized results: scale = Σactual / Σraw_proj
+// over completed rounds (the Performance tab already pairs projections with actuals). Shrunk toward
+// 1.0 at low sample size and clamped, so a thin sample never swings projections. Committed default
+// is identity; refreshCalibration() recomputes it from snapshots+actuals each session and caches it
+// to localStorage so it applies on the next load. See computeCalibration()/refreshCalibration().
+const CALIBRATION = {GK:1, DEF:1, MID:1, FWD:1};
+let _CAL = Object.assign({}, CALIBRATION);
+try { const _c = JSON.parse(localStorage.getItem('wctd_calibration') || 'null'); if(_c && typeof _c === 'object') _CAL = Object.assign({}, CALIBRATION, _c); } catch {}
+function calFactor(pos){ const v = _CAL[pos]; return (typeof v === 'number' && isFinite(v) && v > 0) ? v : 1; }
+
+function projectXPts(p, md, raw){
+  if(p.pos==='GK') return projectGK(p, md, raw);
   const t = TEAMS[p.team];
   const fx = getOppFor(p.team, md);
   if(!fx) return null;
@@ -3210,15 +3221,21 @@ function projectXPts(p, md){
   // outcome is ~12-15% below the MEAN. We model the median, since that's what users plan around.
   // Bookmaker team-level data stays intact; only the player-distribution layer is deflated.
   xpts *= 0.87;
+  // CALIBRATION: per-position correction learned from realized results (identity until trained,
+  // and skipped when raw=true so the feedback fit isn't applied to its own training input).
+  const cf = raw ? 1 : calFactor(p.pos);
+  xpts *= cf;
+  const components = {appearance:appPts*0.87, goals:(gPts+pkPts)*0.87, assists:aPts*0.87, cs:cPts*0.87, concede:conPts, tackles:tkPts*0.87, chances:ccPts*0.87, sot:sotPts*0.87, penWon:penWonPts*0.87, bonus:bonusExp*0.87, scout:scoutEV, cards:cardPen + redPts};
+  for(const k in components) components[k] = round1(components[k] * cf);
   return {
     xpts: round1(xpts),
-    components:{appearance:round1(appPts*0.87), goals:round1((gPts+pkPts)*0.87), assists:round1(aPts*0.87), cs:round1(cPts*0.87), concede:round1(conPts), tackles:round1(tkPts*0.87), chances:round1(ccPts*0.87), sot:round1(sotPts*0.87), penWon:round1(penWonPts*0.87), bonus:round1(bonusExp*0.87), scout:round1(scoutEV), cards:round1(cardPen + redPts)},
+    components,
     teamXG:round2(teamXG), teamXGA:round2(teamXGA), csProb:round2(teamCsProb), xgSource,
     fx
   };
 }
 
-function projectGK(p, md){
+function projectGK(p, md, raw){
   const t = TEAMS[p.team];
   const fx = getOppFor(p.team, md);
   if(!fx) return null;
@@ -3263,9 +3280,13 @@ function projectGK(p, md){
   let xpts = appearance + csPts + concedePen + savePts + gkGoalPts + penSavePts + bonusExp + cardPen + scoutEV;
   // Same variance deflator as outfield
   xpts *= 0.87;
+  const cf = raw ? 1 : calFactor(p.pos);
+  xpts *= cf;
+  const components = {appearance:appearance*0.87, goals:gkGoalPts*0.87, assists:0, cs:csPts*0.87, concede:concedePen, bonus:bonusExp*0.87, scout:scoutEV*0.87, cards:cardPen, saves:savePts*0.87, penSave:penSavePts*0.87};
+  for(const k in components) components[k] = round1(components[k] * cf);
   return {
     xpts: round1(xpts),
-    components:{appearance:round1(appearance*0.87), goals:round1(gkGoalPts*0.87), assists:0, cs:round1(csPts*0.87), concede:round1(concedePen), bonus:round1(bonusExp*0.87), scout:round1(scoutEV*0.87), cards:round1(cardPen), saves:round1(savePts*0.87), penSave:round1(penSavePts*0.87)},
+    components,
     teamXG:0, teamXGA:round2(teamXGA), csProb:round2(teamCsProb), xgSource,
     fx
   };
@@ -8532,9 +8553,10 @@ function snapshotProjections(md){
     md: md,
     players: PLAYERS.map(p=>{
       const r = projectXPts(p, md);
+      const rRaw = projectXPts(p, md, true);   // point-in-time RAW projection (pre-calibration) for the feedback fit
       const ci = simulateInterval(p, md, 100);
       return { id:p.id, name:p.name, team:p.team, pos:p.pos, price:p.price,
-        own:p.own, mri:p.mri, proj: r?.xpts || 0, floor:ci.floor, ceiling:ci.ceiling };
+        own:p.own, mri:p.mri, proj: r?.xpts || 0, projRaw: rRaw?.xpts || 0, floor:ci.floor, ceiling:ci.ceiling };
     })
   };
   localStorage.setItem(snapshotKey(md), JSON.stringify(snap));
@@ -8570,10 +8592,14 @@ async function fetchActuals(){
     return byId;
   } catch(e){ return {}; }
 }
+// Map a round id to its index in the per-player roundPoints array (group 1/2/3 → 0/1/2,
+// then R32/R16/QF/SF/F → 3..7). Reused by computeMetrics and computeCalibration.
+const ROUND_SEQ = ['1','2','3','R32','R16','QF','SF','F'];
+function roundIndex(md){ return ROUND_SEQ.indexOf(String(md)); }
 function computeMetrics(snap, actualsById){
-  // For each player in snap, compare proj vs actual[snap.md - 1] index
-  const mdIdx = typeof snap.md === 'number' ? snap.md - 1 : null; // group MDs are 1-indexed
-  if(mdIdx===null) return null;
+  // For each player in snap, compare proj vs actual at this round's index (now incl. knockouts)
+  const mdIdx = roundIndex(snap.md);
+  if(mdIdx < 0) return null;
   const rows = snap.players.map(p=>{
     const actual = (actualsById[p.id] || [])[mdIdx];
     if(actual===undefined || actual===null) return null;
@@ -8596,6 +8622,47 @@ function computeMetrics(snap, actualsById){
   const topActuals = [...rows].sort((a,b)=>b.actual-a.actual).slice(0,3).map(r=>r.id);
   const captainHit = topProj && topActuals.includes(topProj.id);
   return { n, mae, rmse, spearman, inIntervalRate, captainHit, rows };
+}
+// Fit the per-position calibration scale from every completed round in the snapshot log.
+// scale = Σactual / Σraw_proj, clamped to [0.6,1.6] and shrunk toward 1.0 by sample size so a
+// thin sample can't swing projections. Returns identity when there's no usable history.
+function computeCalibration(actualsById){
+  const agg = {GK:{p:0,a:0,n:0}, DEF:{p:0,a:0,n:0}, MID:{p:0,a:0,n:0}, FWD:{p:0,a:0,n:0}};
+  for(const snap of getAllSnapshots()){
+    const idx = roundIndex(snap.md);
+    if(idx < 0) continue;
+    for(const sp of (snap.players || [])){
+      const actual = (actualsById[sp.id] || [])[idx];
+      if(actual == null) continue;
+      const g = agg[sp.pos]; if(!g) continue;
+      // Prefer the point-in-time RAW projection stored in the snapshot. Older snapshots predate
+      // calibration (their .proj WAS raw); fall back to recomputing raw if neither is present.
+      let rawProj = sp.projRaw;
+      if(rawProj == null){
+        if(sp.proj != null) rawProj = sp.proj;
+        else { const pl = PLAYER_BY_ID[sp.id]; rawProj = pl ? (projectXPts(pl, snap.md, true)?.xpts) : null; }
+      }
+      if(rawProj == null || rawProj <= 0) continue;
+      g.p += rawProj; g.a += actual; g.n++;
+    }
+  }
+  const N0 = 150, out = {GK:1, DEF:1, MID:1, FWD:1, _n:0, _asof:new Date().toISOString()};
+  for(const pos of ['GK','DEF','MID','FWD']){
+    const g = agg[pos]; out._n += g.n;
+    if(g.n < 10 || g.p <= 0) continue;                          // too thin → keep identity
+    const scale = Math.max(0.6, Math.min(1.6, g.a / g.p));      // clamp to a sane band
+    out[pos] = 1 + (scale - 1) * Math.min(1, g.n / N0);         // shrink toward 1.0
+  }
+  return out;
+}
+// Recompute calibration from live actuals, apply it, and cache it for the next load.
+async function refreshCalibration(){
+  try {
+    const cal = computeCalibration(await fetchActuals());
+    _CAL = Object.assign({}, CALIBRATION, cal);
+    try { localStorage.setItem('wctd_calibration', JSON.stringify(cal)); } catch {}
+    return cal;
+  } catch(e){ return null; }
 }
 function renderPerformance(){
   const status = document.getElementById('perf-status');
@@ -8623,6 +8690,16 @@ function renderPerformance(){
   }
   // Try to compute metrics if any snap + actuals exist
   fetchActuals().then(actualsById=>{
+    // Calibration feedback: fit per-position correction from realized results, apply, and cache.
+    const calNow = computeCalibration(actualsById);
+    _CAL = Object.assign({}, CALIBRATION, calNow);
+    try { localStorage.setItem('wctd_calibration', JSON.stringify(calNow)); } catch {}
+    if(cal){
+      const trained = calNow._n >= 10;
+      cal.innerHTML = `<div class="${trained?'good':'dim'}">${trained?'<span class="good">●</span> ':''}Model calibration (learned scale from ${calNow._n} player-rounds): `
+        + `GK ${calNow.GK.toFixed(2)} · DEF ${calNow.DEF.toFixed(2)} · MID ${calNow.MID.toFixed(2)} · FWD ${calNow.FWD.toFixed(2)}`
+        + `${trained?' — applied to all projections.':' — identity until ≥10 player-rounds of results.'}</div>`;
+    }
     const metricRows = [];
     let totalHits = 0, totalSnaps = 0;
     snaps.forEach(s=>{
@@ -8651,10 +8728,10 @@ function renderPerformance(){
     table.innerHTML = '<thead><tr><th>MD</th><th class="num">N</th><th class="num">MAE</th><th class="num">RMSE</th><th class="num">Spearman ρ</th><th class="num">Coverage</th><th>Captain</th></tr></thead><tbody>' +
       metricRows.map(r=>`<tr><td>${r.md}</td><td class="num">${r.n}</td><td class="num">${r.mae.toFixed(2)}</td><td class="num">${r.rmse.toFixed(2)}</td><td class="num">${r.spearman.toFixed(2)}</td><td class="num">${(r.inIntervalRate*100).toFixed(0)}%</td><td>${r.captainHit?'<span class="good">✓</span>':'<span class="bad">✗</span>'}</td></tr>`).join('') +
       '</tbody>';
-    cal.innerHTML = avgCov >= 0.75 && avgCov <= 0.85 ?
-      '<span class="good">●</span> Coverage on target (' + (avgCov*100).toFixed(0) + '%) — intervals are well-calibrated.' :
-      avgCov < 0.75 ? '<span class="warn">●</span> Coverage below 80% — intervals too narrow; model is overconfident.' :
-      '<span class="warn">●</span> Coverage above 80% — intervals too wide; could tighten.';
+    cal.innerHTML += avgCov >= 0.75 && avgCov <= 0.85 ?
+      '<div><span class="good">●</span> Coverage on target (' + (avgCov*100).toFixed(0) + '%) — intervals are well-calibrated.</div>' :
+      avgCov < 0.75 ? '<div><span class="warn">●</span> Coverage below 80% — intervals too narrow; model is overconfident.</div>' :
+      '<div><span class="warn">●</span> Coverage above 80% — intervals too wide; could tighten.</div>';
   });
 }
 function deleteSnapshot(md){
@@ -9236,6 +9313,22 @@ const TEST_SUITE = [
   },
   { name: 'All 48 teams present',
     fn: () => Object.keys(TEAMS).length === 48 ? {pass:true} : {pass:false, msg:`only ${Object.keys(TEAMS).length} teams`}
+  },
+  { name: 'Calibration is identity with no actuals',
+    fn: () => { const c = computeCalibration({}); return (c.GK===1 && c.DEF===1 && c.MID===1 && c.FWD===1) ? {pass:true} : {pass:false, msg:`got ${JSON.stringify(c)}`}; }
+  },
+  { name: 'calFactor returns 1 for identity/unknown position',
+    fn: () => (calFactor('DEF')===1 && calFactor('ZZZ')===1) ? {pass:true} : {pass:false, msg:`DEF=${calFactor('DEF')} ZZZ=${calFactor('ZZZ')}`}
+  },
+  { name: 'raw projection ignores calibration',
+    fn: () => { // highest-projected outfielder → least sensitive to round1 noise
+      const p = [...PLAYERS].filter(x=>x.pos!=='GK').sort((a,b)=>(projectXPts(b,'1',true)?.xpts||0)-(projectXPts(a,'1',true)?.xpts||0))[0];
+      if(!p) return {pass:true};
+      const save=_CAL[p.pos]; _CAL[p.pos]=1.5;
+      const cal=projectXPts(p,'1'), raw=projectXPts(p,'1',true); _CAL[p.pos]=save;
+      if(!cal||!raw) return {pass:false,msg:'null projection'};
+      const ratio = cal.xpts/(raw.xpts||1);   // calibrated ≈ 1.5× raw; raw unaffected by the factor
+      return (raw.xpts>0 && Math.abs(ratio-1.5)<0.1) ? {pass:true} : {pass:false, msg:`ratio ${ratio.toFixed(3)} (raw ${raw.xpts}, cal ${cal.xpts})`}; }
   },
   { name: 'Optimizer respects position constraints',
     fn: () => {
@@ -10145,6 +10238,9 @@ async function bootstrap(){
     applyOptimized();   // fresh visitor: show the optimizer suggestion as a starting point
   }
   refresh();
+  // Results feedback loop: recompute calibration from the latest actuals; if it's trained, re-render
+  // so the learned correction applies this session too (the cached value already applied on load).
+  refreshCalibration().then(cal=>{ if(cal && cal._n >= 10) refresh(); });
   // capture monitor baseline if first visit, then after refresh save the new baseline for next time
   setTimeout(()=>captureMonitorSnapshot(), 2000);
 }
