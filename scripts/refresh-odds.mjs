@@ -436,9 +436,32 @@ async function probeStats(){
   } catch(e){ console.log('[probe-stats] summary ->', e.message); }
 }
 
+// --probe-minutes: fetch the live FIFA fantasy feed (same source the app uses client-side) and dump
+// the actual per-round points / status / ownership for a few marquee players. roundPoints is the
+// real minutes proxy (≥2 = started 60+, ≥1 = featured, absent/0 = DNP). Confirms whether the live
+// site sees a player as benched — i.e. whether the "Saka pinned to 0.92" stale override is wrong.
+async function probeMinutes(){
+  const WANT = ['saka','messi','kane','bellingham','mbappe','wirtz','de bruyne'];
+  const norm = s => (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[-'’.]/g,'').toLowerCase().trim();
+  let players;
+  try { players = await getJSON('https://play.fifa.com/json/fantasy/players.json'); }
+  catch(e){ console.log('[probe-minutes] FIFA feed fetch failed:', e.message); return; }
+  const arr = Array.isArray(players) ? players : (players.players || players.data || []);
+  console.log('[probe-minutes] feed players:', arr.length);
+  for(const p of arr){
+    const name = p.knownName || `${p.firstName||''} ${p.lastName||''}`.trim();
+    const n = norm(name);
+    if(!WANT.some(w => n.includes(w))) continue;
+    const rp = p.stats?.roundPoints;
+    const vals = rp && typeof rp==='object' ? Object.entries(rp).map(([k,v])=>`${k}:${v}`) : [];
+    console.log(`[probe-minutes] ${name} (${p.position} £${p.price} own=${p.percentSelected}% status=${p.status||'-'}) roundPoints={${vals.join(', ')}} avg=${p.stats?.avgPoints ?? '-'}`);
+  }
+}
+
 const PROBE = process.argv.includes('--probe');
 const PROBE_PLAYERS = process.argv.includes('--probe-players');
 const PROBE_BRACKET = process.argv.includes('--probe-bracket');
 const PROBE_STATS = process.argv.includes('--probe-stats');
-(PROBE_BRACKET ? probeBracket() : PROBE_STATS ? probeStats() : PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
+const PROBE_MINUTES = process.argv.includes('--probe-minutes');
+(PROBE_MINUTES ? probeMinutes() : PROBE_BRACKET ? probeBracket() : PROBE_STATS ? probeStats() : PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
   .catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
