@@ -667,8 +667,8 @@ xPts = appearance_pts                          // P(60+)×2 + P(brief sub)×1
      + cc90 / 2  × adjMin                       // MID chances created
      + sot90 / 2 × adjMin                       // FWD shots on target
      + pen90 × 2 × adjMin                       // P(winning a pen) × 2
-     + 0.001 × adjMin × 6                       // GK goal (rare, +6 official)
-     + 0.10 × 0.22 × adjMin × 5                 // GK pen save EV (+5 official)
+     + 0.001 × adjMin × 9                       // GK goal (rare, +9 official)
+     + 0.10 × 0.22 × adjMin × 3                 // GK pen save EV (+3 official)
      + bonus_exp + fk_bonus_exp + scouting_bonus_ev
      - 0.18 × adjMin × card_modifier            // yellow EV
      - 0.018 × adjMin × 2                       // red EV
@@ -3136,10 +3136,11 @@ function teamShareNorm(team){
 // (projectXPts/projectGK) and the Monte-Carlo simulator (simulateInterval) both read these, so they
 // can't silently drift apart (they had: simulator used goal 7/6/5, pen-save +3, GK-goal +9).
 const SCORING = {
-  goal: {GK:6, DEF:6, MID:5, FWD:4},   // GK/DEF 6, MID 5, FWD 4
+  // Verified against the official play.fifa.com/fantasy/help rules (June 2026).
+  goal: {GK:9, DEF:7, MID:6, FWD:5},   // GK +9, DEF +7, MID +6, FWD +5
   cleanSheet: {GK:5, DEF:5, MID:1, FWD:0},
-  assist: 3, penWon: 2, penSave: 5, gkGoal: 6,
-  yellow: -1, redCard: -2, scout: 2,
+  assist: 3, penWon: 2, penSave: 3, gkGoal: 9,
+  yellow: -1, redCard: -2, ownGoal: -2, concedePerExtraGoal: -1, scout: 2,
 };
 
 // ---------- CALIBRATION (results feedback loop) ----------
@@ -3220,9 +3221,8 @@ function projectXPts(p, md, raw){
   // CS / concedes: teamCsProb already set above (preferring market). teamLam is used for concedes.
   const teamLam = teamXGA;
 
-  // POINTS by position — official FIFA Fantasy 2026 rules (same scoring as UEFA EURO Fantasy):
-  // goal = 6 (GK/DEF), 5 (MID), 4 (FWD). Cross-verified June 2026 against multiple guides
-  // summarizing play.fifa.com/fantasy/help (Yahoo, bet365, FantasyFootballScout, AllAboutFPL).
+  // POINTS by position — official FIFA World Cup 2026 Fantasy rules (play.fifa.com/fantasy/help,
+  // verified June 2026): goal = GK 9, DEF 7, MID 6, FWD 5. All scoring lives in SCORING (top of file).
   const goalPts = SCORING.goal[p.pos];     // GK handled in projectGK
   const csPts  = p.pos==='DEF'?5 : p.pos==='MID'?1 : 0;      // Corrected: DEF=5 (was 4)
   // Appearance: P(plays 60+)*2 + P(brief sub)*1 ; bench → 0
@@ -3849,7 +3849,7 @@ function _simMatch(p, md){
     if(mins>=60 && teamGA===0) pts += 5;
     pts -= Math.max(0, teamGA - 1);
     pts += Math.floor(saves/3);
-    if(Math.random() < 0.10 * adjMin && Math.random() < 0.22) pts += SCORING.penSave; // pen save (+5; was +3)
+    if(Math.random() < 0.10 * adjMin && Math.random() < 0.22) pts += SCORING.penSave; // pen save (+3 official)
     if(Math.random() < 0.001 * adjMin) pts += SCORING.gkGoal; // GK goal (+6; was +9)
     if(Math.random() < 0.03 * adjMin) pts += SCORING.yellow; // yellow
     return pts;
@@ -3866,7 +3866,7 @@ function _simMatch(p, md){
   const sot = p.pos==='FWD' ? _poisson(lookupSot90(p)*adjMin) : 0;
   const penWon = _poisson(lookupPenDrawn90(p)*adjMin);
   const teamGA = _poisson(teamXGA * adjMin);
-  const goalPts = SCORING.goal[p.pos];   // was 7/6/5; official 6/5/4
+  const goalPts = SCORING.goal[p.pos];   // official: GK 9, DEF 7, MID 6, FWD 5
   const csPts = SCORING.cleanSheet[p.pos];
   let pts = mins>=60 ? 2 : 1;
   pts += (goals + pkGoals + fkGoals) * goalPts;
@@ -9381,11 +9381,11 @@ const TEST_SUITE = [
   { name: 'All 48 teams present',
     fn: () => Object.keys(TEAMS).length === 48 ? {pass:true} : {pass:false, msg:`only ${Object.keys(TEAMS).length} teams`}
   },
-  { name: 'Official scoring constants (goal 6/6/5/4, CS 5/5/1, assist 3, redCard -2, penSave +5, gkGoal +6)',
+  { name: 'Official scoring (goal GK9/DEF7/MID6/FWD5, CS 5/5/1, assist 3, redCard -2, penSave +3, gkGoal +9)',
     fn: () => { const s = SCORING;
-      const okGoal = s.goal.GK===6 && s.goal.DEF===6 && s.goal.MID===5 && s.goal.FWD===4;
+      const okGoal = s.goal.GK===9 && s.goal.DEF===7 && s.goal.MID===6 && s.goal.FWD===5;
       const okCs = s.cleanSheet.GK===5 && s.cleanSheet.DEF===5 && s.cleanSheet.MID===1;
-      const okMisc = s.assist===3 && s.penWon===2 && s.penSave===5 && s.gkGoal===6 && s.yellow===-1 && s.redCard===-2 && s.scout===2;
+      const okMisc = s.assist===3 && s.penWon===2 && s.penSave===3 && s.gkGoal===9 && s.yellow===-1 && s.redCard===-2 && s.ownGoal===-2 && s.scout===2;
       return (okGoal && okCs && okMisc) ? {pass:true} : {pass:false, msg:`goal ${okGoal} cs ${okCs} misc ${okMisc}`}; }
   },
   { name: 'Calibration is identity with no actuals',
@@ -9485,17 +9485,17 @@ const TEST_SUITE = [
     }
   },
   // === SCORING RULE REGRESSION (official FIFA Fantasy 2026 values) ===
-  { name: 'FWD goal worth 4 pts (official 2026 scoring)',
+  { name: 'FWD goal worth 5 pts (official 2026 scoring)',
     fn: () => {
-      // synthetic pure-scorer: gs=1 → goals = openXG×norm×(4 + 0.08 outside-box)×0.87
+      // synthetic pure-scorer: gs=1 → goals = openXG×norm×(5 + 0.08 outside-box)×0.87
       const fake = {name:'__test_fwd__', team:'FRA', pos:'FWD', price:5, own:0.50, mri:1, gs:1, as:0, pt:0, fk:0, ck:0};
       const r = projectXPts(fake, 1);
       if(!r || !r.teamXG) return {pass:false, msg:'no projection'};
       const pkTeamGoals = 0.12 * (TEAMS.FRA.att/85) * 0.78;
       const openXG = Math.max(0.2, r.teamXG - pkTeamGoals - 0.05);
-      const expected = (openXG / r.teamXG) * teamShareNorm('FRA').g * (4 + 0.08) * 0.87;
+      const expected = (openXG / r.teamXG) * teamShareNorm('FRA').g * (SCORING.goal.FWD + 0.08) * 0.87;
       const ratio = (r.components.goals || 0) / r.teamXG;
-      return Math.abs(ratio - expected) < 0.08 ? {pass:true} : {pass:false, msg:`goals/xG ratio ${ratio.toFixed(2)}, expected ~${expected.toFixed(2)} (goal=4pts)`};
+      return Math.abs(ratio - expected) < 0.08 ? {pass:true} : {pass:false, msg:`goals/xG ratio ${ratio.toFixed(2)}, expected ~${expected.toFixed(2)} (goal=${SCORING.goal.FWD}pts)`};
     }
   },
   // λ=0.75 shrinkage intentionally leaves a bounded residual (full rescale over-trusts the
