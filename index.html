@@ -3164,22 +3164,31 @@ const PEN90 = {
   'Mohammed Kudus':0.11,'Christian Pulisic':0.09,'Son Heung-min':0.08,'Takefusa Kubo':0.07,
 };
 // Per-position defaults (apply when player not in lookup)
-// STRICT MODE — secondary scoring axes (tackles, chances, SOT, pen-drawn) only count
-// for players with HAND-CURATED stats (~80 marquee players in TK90/CC90/SOT90/PEN90 dicts).
-// For all other players (~1370 of 1454), defaults return 0 because price-tier proxies were
-// inflating xPts by 1-2 pts per match without observed evidence. Add stats per player to
-// re-enable these axes for them.
+// Secondary scoring axes (official FIFA WC2026: MID +1/3 tackles & +1/2 big chances created;
+// FWD +1/2 shots on target). HAND-CURATED per-90 values for ~80 marquee players take precedence.
+// For everyone else we DON'T fall back to flat price-tier proxies (those inflated xPts ~1-2 pts/match
+// uniformly — the bug STRICT MODE removed). Instead, chances/SOT fall back to a PROFILE PRIOR scaled
+// to the player's OWN model-derived involvement (assist share → chances, goal share → SOT). This is
+// self-consistent — if the model already projects you to create/score, crediting proportional
+// chances/shots isn't phantom — and it stops zeroing elite UNCURATED stars (e.g. Messi, who isn't in
+// SOT90 and was getting 0 shot-on-target points despite the highest goal share of any forward).
+// Fringe players (low shares) still land near 0. Tackles have NO profile prior — tackle volume is a
+// defensive trait uncorrelated with attacking shares, so it stays hand-curated only (0 otherwise).
 function lookupTk90(p){
   if(p.pos!=='MID') return 0;
   return TK90[p.name] !== undefined ? TK90[p.name] : 0;
 }
 function lookupCc90(p){
   if(p.pos!=='MID') return 0;
-  return CC90[p.name] !== undefined ? CC90[p.name] : 0;
+  if(CC90[p.name] !== undefined) return CC90[p.name];
+  // curated set: big-chances-created/90 ≈ assist-share × ~10
+  return Math.min(2.8, Math.max(0, (p.as||0) - 0.05) * 10);
 }
 function lookupSot90(p){
   if(p.pos!=='FWD') return 0;
-  return SOT90[p.name] !== undefined ? SOT90[p.name] : 0;
+  if(SOT90[p.name] !== undefined) return SOT90[p.name];
+  // curated set: shots-on-target/90 ≈ goal-share × ~5.7
+  return Math.min(2.2, Math.max(0, (p.gs||0) - 0.06) * 6.2);
 }
 function lookupPenDrawn90(p){
   return PEN90[p.name] !== undefined ? PEN90[p.name] : 0;
@@ -8885,10 +8894,26 @@ function applyManualNewsOverrides(){
     console.log('[news-override] disabled — assumption-free mode (live data signals only)');
     return;
   }
-  let applied = 0;
+  // Once real WC matches are played, a PRE-TOURNAMENT minutes PREDICTION (e.g. the May-30
+  // "CL Final starter → will start every WC match" batch) must yield to what actually happened.
+  // Otherwise a stale May assumption pins a since-benched star's minutes too high (the bug behind
+  // "Saka projects above Messi" — Saka was hard-pinned at 0.92 from May 30 regardless of group-stage
+  // reality). Live appearance data (formApps from stats.roundPoints, set in rebuildFromAPI) wins for
+  // UPWARD predictions dated before kickoff. DOWNGRADES (injuries/suspensions/depth corrections,
+  // mri<0.6) and per-MD ramps still apply — those are current facts, not pre-tournament guesses.
+  // Offline (no live feed) formApps is undefined, so this is a no-op and the overrides apply as before.
+  const TOURNAMENT_START = '2026-06-11';
+  let applied = 0, deferred = 0;
   for(const o of MANUAL_NEWS_OVERRIDES){
     const p = PLAYERS.find(x => x.team === o.team && _norm(x.name) === _norm(o.name));
     if(p){
+      const haveLiveMinutes = (p.formApps || 0) >= 2 && p.realizedPPG != null;
+      const isPreTournamentUpwardPrediction = o.date && o.date < TOURNAMENT_START && o.mri >= 0.6 && !o.mriByMd;
+      if(haveLiveMinutes && isPreTournamentUpwardPrediction){
+        p._newsOverrideDeferred = o;   // observed WC minutes supersede the stale prediction
+        deferred++;
+        continue;
+      }
       if(p._mriPreLineup === undefined) p._mriPreLineup = p.mri;
       p.mri = o.mri;
       p.mriByMd = o.mriByMd || null;   // optional per-MD minutes ramp (e.g. injury return)
@@ -8899,6 +8924,7 @@ function applyManualNewsOverrides(){
       console.warn('[news-override] Player not found:', o.team, o.name);
     }
   }
+  if(deferred) console.log('[news-override] Deferred', deferred, 'pre-tournament minutes predictions to live appearance data');
   if(typeof invalidateShareNorms === 'function') invalidateShareNorms();
   console.log('[news-override] Applied', applied, 'of', MANUAL_NEWS_OVERRIDES.length);
 }
