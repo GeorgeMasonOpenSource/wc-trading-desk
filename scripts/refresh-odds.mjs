@@ -388,7 +388,57 @@ async function probePlayers(){
   console.log('[probe-players] stats-key histogram:', JSON.stringify(keyHist));
 }
 
+// --probe-bracket: dump every knockout event's competitors + name so we can reconstruct the slot
+// lineage. Resolved games show real teams; unresolved future games show placeholders whose NAMES
+// encode the tree (e.g. "Round of 32 1 Winner at Round of 32 2 Winner") — that's the bracket.
+async function probeBracket(){
+  const sb = await getJSON(SCOREBOARD);
+  const events = (sb.events||[]).slice().sort((x,y)=>Date.parse(x.date||0)-Date.parse(y.date||0));
+  for(const ev of events){
+    const c = ev.competitions?.[0]; if(!c) continue;
+    const h = c.competitors?.find(x=>x.homeAway==='home');
+    const a = c.competitors?.find(x=>x.homeAway==='away');
+    const round = ev.season?.type?.name || c.notes?.[0]?.headline || ev.name || '';
+    const nm = x => x?.team?.abbreviation || x?.team?.displayName || x?.team?.name || '?';
+    // only knockout-ish events: skip the 72 group games (both real, early dates)
+    const label = `${ev.date?.slice(0,10)} | ${nm(a)} @ ${nm(h)} | "${ev.name||''}" | shortName="${ev.shortName||''}"`;
+    if(/Round of|Quarter|Semi|Final|Winner/i.test(ev.name||'') || /Round of|Quarter|Semi|Final|Winner/i.test(JSON.stringify(c.competitors||[]).slice(0,400)))
+      console.log('[probe-bracket]', label);
+  }
+  // also dump one full event object so we can see if slot lineage is structured (not just in the name)
+  const ko = events.find(e=>/Round of 16|Quarter/i.test(e.name||''));
+  if(ko) console.log('[probe-bracket] sample KO event:', JSON.stringify(ko).slice(0, 1600));
+}
+
+// --probe-stats: check whether ESPN exposes per-player stats (goals/assists/shots/SOT/minutes) for a
+// completed group game's box score — feasibility for real per-player shares.
+async function probeStats(){
+  const sb = await getJSON(SCOREBOARD);
+  const events = (sb.events||[]).slice().sort((x,y)=>Date.parse(x.date||0)-Date.parse(y.date||0));
+  const done = events.find(e => e.competitions?.[0]?.status?.type?.state === 'post');
+  if(!done){ console.log('[probe-stats] no completed event found'); return; }
+  console.log('[probe-stats] event', done.id, done.name);
+  const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${done.id}/competitions/${done.id}`;
+  // try the competitors → roster / statistics refs
+  try {
+    const comp = (await getJSON(SCOREBOARD)); // placeholder to keep getJSON warm
+  } catch {}
+  for(const path of ['/competitors?lang=en','/details?lang=en','/situation?lang=en']){
+    try { const j = await getJSON(base+path); console.log(`[probe-stats] ${path} keys:`, Object.keys(j).join(','), '|', JSON.stringify(j).slice(0,500)); }
+    catch(e){ console.log(`[probe-stats] ${path} -> ${e.message}`); }
+  }
+  // boxscore via site API summary
+  try {
+    const s = await getJSON(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${done.id}`);
+    console.log('[probe-stats] summary keys:', Object.keys(s).join(','));
+    const ath = s.boxscore?.players || s.rosters || s.boxscore?.form;
+    console.log('[probe-stats] boxscore.players present:', !!s.boxscore?.players, '| sample:', JSON.stringify(s.boxscore?.players||s.rosters||'(none)').slice(0,1400));
+  } catch(e){ console.log('[probe-stats] summary ->', e.message); }
+}
+
 const PROBE = process.argv.includes('--probe');
 const PROBE_PLAYERS = process.argv.includes('--probe-players');
-(PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
+const PROBE_BRACKET = process.argv.includes('--probe-bracket');
+const PROBE_STATS = process.argv.includes('--probe-stats');
+(PROBE_BRACKET ? probeBracket() : PROBE_STATS ? probeStats() : PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
   .catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
