@@ -338,6 +338,11 @@
   </details>
 
   <details class="tool" open>
+    <summary>🔁 Transfer Roadmap — by round, no hits</summary>
+    <div style="margin-top:12px" id="transfer-roadmap-panel"></div>
+  </details>
+
+  <details class="tool" open>
     <summary>🎯 Optimal Chip Strategy</summary>
     <div style="margin-top:12px" id="chip-strategy-panel"></div>
   </details>
@@ -4259,6 +4264,37 @@ function recommendFreeTransfers(squadIds, md){
     bank = m.newBank;
   }
   return { unlimited:false, alloc, moves, totalDelta: moves.reduce((a,m)=>a+m.delta,0), bank };
+}
+
+// Committed free-transfer roadmap from the current round to the Final: at each round take that
+// round's free moves (recommendFreeTransfers — never a hit), apply them, and carry the evolved
+// squad forward. Gives the user a "what to do each gameweek" plan with zero points hits.
+function buildTransferRoadmap(){
+  const SEQ = ['1','2','3','R32','R16','QF','SF','F'];
+  const startIdx = Math.max(0, SEQ.indexOf(String(STATE.md)));
+  let squad = STATE.squad.slice();
+  const out = [];
+  for(const md of SEQ.slice(startIdx)){
+    let rec; try { rec = recommendFreeTransfers(squad, md); } catch { rec = null; }
+    if(!rec){ out.push({md, moves:[], alloc:FT_ALLOC[md]}); continue; }
+    if(rec.unlimited){ out.push({md, unlimited:true, moves:[]}); continue; }
+    out.push({md, alloc:rec.alloc, moves:rec.moves, totalDelta:rec.totalDelta});
+    rec.moves.forEach(m=>{ squad = squad.map(id=>id===m.outId?m.inId:id); });   // evolve for next round
+  }
+  return out;
+}
+function renderTransferRoadmap(){
+  const el = document.getElementById('transfer-roadmap-panel'); if(!el) return;
+  if(STATE.squad.length < 11){ el.innerHTML = '<div class="dim">Fill your team to see the transfer roadmap.</div>'; return; }
+  const road = buildTransferRoadmap();
+  el.innerHTML = `<div class="dim" style="font-size:11.5px;margin-bottom:10px">Each round's recommended moves <b>within the free allowance — zero −3 hits</b>. Plan assumes you make each round's moves (the squad carries forward).</div>` +
+    road.map(r=>{
+      const head = `<b>${MD_LABEL(r.md)}</b> <span class="dim">· ${r.unlimited?'∞ free (rebuild)':(r.alloc+' free')}</span>`;
+      if(r.unlimited) return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head}</div><div class="sub">Unlimited transfers — re-optimise the whole squad for the knockouts (no hit).</div></div><div class="ev good">rebuild</div></div>`;
+      if(!r.moves.length) return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head}</div><div class="sub">No worthwhile free move — roll / hold.</div></div><div class="ev">hold</div></div>`;
+      const list = r.moves.map((m,i)=>`<div style="margin-top:${i?3:5}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
+      return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head} — use ${r.moves.length}/${r.alloc}</div><div class="sub">${list}</div></div><div class="ev good">+${r.totalDelta.toFixed(1)}</div></div>`;
+    }).join('');
 }
 
 function planSeason(startSquadIds, currentBank, opts={}){
@@ -10307,6 +10343,7 @@ function renderAll(){
     ['renderHitCalc',renderHitCalc], ['renderInjurySim',renderInjurySim],
     ['renderTemplateDiff',renderTemplateDiff], ['renderSurprisePicks',renderSurprisePicks],
     ['renderTestResults',renderTestResults], ['renderChipStrategyPanel',renderChipStrategyPanel],
+    ['renderTransferRoadmap',renderTransferRoadmap],
     ['renderSaveSlots',renderSaveSlots],
   ];
   const errors = [];
