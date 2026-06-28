@@ -3254,10 +3254,17 @@ function calFactor(pos){ const v = _CAL[pos]; return (typeof v === 'number' && i
 // multiplier vs a ~3.5pt "par game". Identity when there's no tournament history (≥2 appearances).
 function formFactor(p){
   if(!p || p.formApps == null || p.formApps < 2 || p.realizedPPG == null) return 1;
-  const PAR = 3.5;
-  let f = Math.sqrt(Math.max(0.2, p.realizedPPG) / PAR);          // dampened ratio to par
+  // PAR scales with PRICE — a premium is expected to return more than a squad filler, so the same
+  // realized PPG is underperformance for the premium and overperformance for the filler. A flat par
+  // (the old 3.5) let a £9.5 premium averaging 4.3 read as "above par" and escape any markdown, which
+  // is why a mediocre-but-expensive name (Saka 4.3) out-projected an elite producer (Messi 13.3).
+  const par = 2.3 + Math.max(0, (p.price || 5.0) - 4.0) * 0.42;   // £4→2.3, £6→3.1, £9.5→4.6, £10.5→5.0
+  let f = Math.sqrt(Math.max(0.2, p.realizedPPG) / par);          // dampened ratio to (price-relative) par
   f = 1 + (f - 1) * Math.min(1, p.formApps / 3);                  // shrink toward 1 with few games
-  return Math.max(0.70, Math.min(1.15, f));                      // bounded so it nudges, never dominates
+  // Authority: after a full group stage, realized output IS the strongest signal we have (more
+  // predictive than the structural model), so the band is wide enough to actually separate a
+  // 3×-par producer from a par one — bounded only to stop a single fixture from fully taking over.
+  return Math.max(0.55, Math.min(1.55, f));
 }
 
 function projectXPts(p, md, raw){
@@ -9795,9 +9802,12 @@ const TEST_SUITE = [
   { name: 'Form factor: identity w/o data, marks down non-producers, bounded',
     fn: () => {
       const id = formFactor({}) === 1 && formFactor({formApps:1, realizedPPG:1}) === 1;
-      const down = formFactor({formApps:3, realizedPPG:2}) < 1 && formFactor({formApps:3, realizedPPG:2}) >= 0.70;
-      const bounded = formFactor({formApps:3, realizedPPG:99}) <= 1.15 && formFactor({formApps:3, realizedPPG:0}) >= 0.70;
-      return (id && down && bounded) ? {pass:true} : {pass:false, msg:`id ${id} down ${down} bounded ${bounded}`};
+      // price-relative par: a £9.5 premium averaging 4.3 is UNDER par (marked down); an elite producer is lifted
+      const premUnder = formFactor({formApps:3, realizedPPG:4.3, price:9.5}) < 1;
+      const fillerOver = formFactor({formApps:3, realizedPPG:4.3, price:4.5}) > 1;
+      const down = formFactor({formApps:3, realizedPPG:2, price:5.0}) < 1;
+      const bounded = formFactor({formApps:3, realizedPPG:99, price:10}) <= 1.55 && formFactor({formApps:3, realizedPPG:0, price:6}) >= 0.55;
+      return (id && premUnder && fillerOver && down && bounded) ? {pass:true} : {pass:false, msg:`id ${id} premUnder ${premUnder} fillerOver ${fillerOver} down ${down} bounded ${bounded}`};
     }
   },
   { name: 'Calibration is identity with no actuals',
