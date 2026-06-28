@@ -199,6 +199,15 @@
   .pool-row .pr-pred{font-family:var(--mono);font-weight:700;font-size:13px;min-width:34px;text-align:right}
   .pool-row .pr-add{width:24px;height:24px;border-radius:50%;padding:0;font-size:14px;flex:none}
   .pool-row.owned{opacity:.55}
+  /* mobile: touch has no hover, so make remove/add always visible + bigger tap targets */
+  @media(max-width:768px){
+    .pitch-card .card-x{opacity:.92;width:22px;height:22px;font-size:12px}
+    .pool-row{padding:10px 12px}
+    .pool-row .pr-add{width:30px;height:30px;font-size:17px}
+    #myteam-pool{max-height:62vh}
+    #myteam-savebar{position:sticky;bottom:0;background:var(--panel);z-index:6;margin-left:-20px;margin-right:-20px;padding-left:20px;padding-right:20px}
+    .rec .ev{align-self:flex-start}
+  }
   /* this-round directive banner */
   .directive-card{background:linear-gradient(135deg,rgba(62,224,160,.12),rgba(106,169,255,.08) 60%,transparent),var(--panel);
     border:1px solid var(--line2);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow)}
@@ -331,8 +340,8 @@
       <div>
         <div class="pitch" id="pitch"></div>
         <div id="myteam-savebar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
-          <button class="primary" onclick="saveMyTeam()" style="font-size:14px;padding:10px 18px">💾 Save my team</button>
-          <button onclick="resetToMyTeam()" style="font-size:14px;padding:10px 16px">↺ Load saved team</button>
+          <button class="primary" onclick="saveMyTeam()" style="font-size:14px;padding:11px 20px">💾 Save my team</button>
+          <button onclick="resetToMyTeam()" style="font-size:14px;padding:11px 18px">↺ Reset to saved</button>
           <span class="myteam-status dim" style="font-size:12px"></span>
         </div>
       </div>
@@ -394,34 +403,11 @@
     </div>
   </details>
 
-  <details class="tool" open>
-    <summary>💾 Save / Load Team Slots</summary>
-    <div style="margin-top:12px" id="save-slots-list"></div>
-  </details>
   <div style="height:12px"></div>
-  <div class="split3">
-    <div class="panel">
-      <h2>Hit Calculator</h2>
-      <div class="dim" style="font-size:11px;margin-bottom:8px">Is taking a -3 hit worth it? Break-even = +3 xPts over remaining horizon.</div>
-      <div class="row" style="gap:6px;align-items:end;flex-wrap:wrap">
-        <label>Out: <select id="hit-out" style="max-width:140px"></select></label>
-        <label>In: <select id="hit-in" style="max-width:140px"></select></label>
-        <button id="hit-calc" class="primary">Calc</button>
-      </div>
-      <div id="hit-result" style="margin-top:10px"></div>
-    </div>
-    <div class="panel">
-      <h2>Injury Simulator</h2>
-      <div class="dim" style="font-size:11px;margin-bottom:8px">If a player gets injured, what's the optimal replacement + impact?</div>
-      <label>Simulate injury: <select id="inj-player" style="max-width:200px"></select></label>
-      <button id="inj-run" class="primary" style="margin-top:6px">Simulate</button>
-      <div id="inj-result" style="margin-top:10px"></div>
-    </div>
-    <div class="panel">
-      <h2>Squad vs Template</h2>
-      <div class="dim" style="font-size:11px;margin-bottom:8px">Your squad's deviation from the most-owned 11 (the "template" team).</div>
-      <div id="tmpl-diff"></div>
-    </div>
+  <div class="panel">
+    <h2>Squad vs Template</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">Your squad's deviation from the most-owned 11 (the "template" team).</div>
+    <div id="tmpl-diff"></div>
   </div>
 </section>
 
@@ -490,6 +476,14 @@
     <div class="dim" style="font-size:11px;margin-top:6px">Save your real squad once. Then plan week-by-week — try transfers, step matchdays — and your tweaks are a <b>working copy</b>. <b>Reset</b> reverts to the saved team; <b>Save</b> commits a transfer you've actually made.</div>
   </div>
   <div style="height:12px"></div>
+  <div class="panel" style="border:1px solid var(--acc)">
+    <h2>🔁 This gameweek — <span id="tw-md">R32</span></h2>
+    <div class="dim" style="font-size:12px;margin-bottom:10px">The optimal move(s) for your team this round, within your free transfers — no −3 hits.</div>
+    <div id="tr-thisweek"></div>
+  </div>
+  <div style="height:14px"></div>
+  <details class="tool">
+    <summary>Advanced planning — full multi-round plan, single-MD scenarios, what-if</summary>
   <div class="panel">
     <h2>Multi-MD Transfer Plan ("Cheat Code")</h2>
     <div class="dim" style="margin-bottom:10px;font-size:12px">Greedy per-MD optimizer respecting FT allocation (2/MD + carry 1), hit costs (-3 per extra transfer), country caps escalating by stage, and chip availability. Plan recomputes from your current squad whenever you click "Recompute".</div>
@@ -533,6 +527,7 @@
     </div>
     <div id="tr-whatif" style="margin-top:10px"></div>
   </div>
+  </details>
 </section>
 
 <!-- CAPTAINCY -->
@@ -4331,7 +4326,9 @@ function renderTransferRoadmap(){
       if(r.unlimited) return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head}</div><div class="sub">Unlimited transfers — re-optimise the whole squad for the knockouts (no hit).</div></div><div class="ev good">rebuild</div></div>`;
       if(!r.moves.length) return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head}</div><div class="sub">No worthwhile free move — roll / hold.</div></div><div class="ev">hold</div></div>`;
       const list = r.moves.map((m,i)=>`<div style="margin-top:${i?3:5}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
-      return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head} — use ${r.moves.length}/${r.alloc}</div><div class="sub">${list}</div></div><div class="ev good">+${r.totalDelta.toFixed(1)}</div></div>`;
+      // Only the current round's moves are directly applicable (later rounds depend on earlier ones).
+      const applyBtn = (String(r.md)===String(STATE.md)) ? `<div style="margin-top:8px"><button class="primary" onclick="applyMoves('${r.moves.map(m=>m.outId+':'+m.inId).join(',')}')">✓ Apply ${r.moves.length>1?r.moves.length+' ':''}now</button></div>` : '';
+      return `<div class="rec" style="margin-bottom:8px"><div><div class="title">${head} — use ${r.moves.length}/${r.alloc}</div><div class="sub">${list}${applyBtn}</div></div><div class="ev good">+${r.totalDelta.toFixed(1)}</div></div>`;
     }).join('');
 }
 
@@ -4819,7 +4816,8 @@ function _transferRecHtml(md){
   const alloc = rec?.alloc ?? FT_ALLOC[md];
   if(rec && rec.moves.length){
     const list = rec.moves.map((m,i)=>`<div style="margin-top:${i?4:6}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} xPts · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
-    return `<div class="rec"><div><div class="title">Transfers — use ${rec.moves.length} of ${alloc} free (no hit)</div><div class="sub">Best moves within your free allowance for ${MD_LABEL(md)} — total <b class="good">+${rec.totalDelta.toFixed(1)} xPts</b>, zero points hit:${list}</div></div><div class="ev good">+${rec.totalDelta.toFixed(1)}</div></div>`;
+    const spec = rec.moves.map(m=>`${m.outId}:${m.inId}`).join(',');
+    return `<div class="rec"><div><div class="title">Transfers — use ${rec.moves.length} of ${alloc} free (no hit)</div><div class="sub">Best moves within your free allowance for ${MD_LABEL(md)} — total <b class="good">+${rec.totalDelta.toFixed(1)} xPts</b>, zero points hit:${list}<div style="margin-top:8px"><button class="primary" onclick="applyMoves('${spec}')">✓ Apply ${rec.moves.length>1?'all '+rec.moves.length:''} transfer${rec.moves.length>1?'s':''}</button></div></div></div><div class="ev good">+${rec.totalDelta.toFixed(1)}</div></div>`;
   }
   return `<div class="rec"><div><div class="title">Transfers — hold / roll</div><div class="sub">No move clears +0.5 xPts at ${MD_LABEL(md)}. You have ${alloc} free transfer${alloc>1?'s':''} — save ${alloc>1?'them':'it'} (taking a −3 hit isn't worth it here).</div></div><div class="ev">hold</div></div>`;
 }
@@ -4853,7 +4851,8 @@ function renderDirective(){
     tCell = `<div class="dcell act"><div class="k">🔁 Transfers</div><div class="v">Free rebuild</div><div class="s">Unlimited transfers this round — re-optimise in <a onclick="switchTab('optimizer')">Squad</a>, country cap ${CAP_ALLOC[md]||3}/team.</div></div>`;
   } else if(rec && rec.moves.length){
     const head = rec.moves.slice(0,2).map(m=>`${m.out?.name}→${m.in?.name}`).join(', ');
-    tCell = `<div class="dcell act"><div class="k">🔁 Transfers · use ${rec.moves.length}/${rec.alloc} free</div><div class="v" style="font-size:14px">${head}${rec.moves.length>2?` +${rec.moves.length-2}`:''}</div><div class="s">+${rec.totalDelta.toFixed(1)} xPts, <b>no hit</b>. Full list in Recommended Action.</div></div>`;
+    const spec = rec.moves.map(m=>`${m.outId}:${m.inId}`).join(',');
+    tCell = `<div class="dcell act"><div class="k">🔁 Transfers · use ${rec.moves.length}/${rec.alloc} free</div><div class="v" style="font-size:14px">${head}${rec.moves.length>2?` +${rec.moves.length-2}`:''}</div><div class="s">+${rec.totalDelta.toFixed(1)} xPts, <b>no hit</b>. <button class="primary" style="padding:3px 10px;font-size:12px;margin-top:4px" onclick="applyMoves('${spec}')">✓ Apply</button></div></div>`;
   } else {
     const alloc = rec?.alloc ?? FT_ALLOC[md];
     tCell = `<div class="dcell hold"><div class="k">🔁 Transfers · ${alloc} free</div><div class="v">Hold / roll</div><div class="s">No move clears +0.5 xPts — save your free transfer${alloc>1?'s':''}.</div></div>`;
@@ -5411,7 +5410,7 @@ function renderPitch(){
     const srcLabel = `Data confidence: team-xG ${dim1?'✓ bookie':'✗ Elo'} · MRI ${dim2?'✓ observed':'✗ heuristic'} · player stats ${dim3?'✓ curated':'✗ proxy'}`;
     const srcColor = score === 3 ? 'var(--good)' : score === 2 ? 'var(--ink2)' : 'var(--warn)';
     return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer" title="Tap to swap ${shortName(p.name)}">
-      <button class="card-x" title="Remove ${shortName(p.name)}" onclick="event.stopPropagation();toggleSquad(${p.id});refresh()">✕</button>
+      <button class="card-x" title="Remove ${shortName(p.name)} → pick a replacement" onclick="event.stopPropagation();toggleSquad(${p.id})">✕</button>
       <span class="card-swap" title="Swap">⇄</span>
       <div class="shirt" style="pointer-events:none">${shirtSvg(p.team, isCap, isVC)}</div>
       <div class="n pos-${p.pos}" style="pointer-events:none">${shortName(p.name)}</div>
@@ -5833,9 +5832,28 @@ function recomputePlan(){
 }
 window.recomputePlan = recomputePlan;
 
+// Simple "what do I do THIS gameweek" — the headline answer at the top of AI Transfers.
+function renderThisGameweek(){
+  const el = document.getElementById('tr-thisweek'); if(!el) return;
+  const md = STATE.md;
+  const tw = document.getElementById('tw-md'); if(tw) tw.textContent = MD_LABEL(md);
+  if(STATE.squad.length < 11){ el.innerHTML = '<div class="dim">Import your team above to get this gameweek’s recommendation.</div>'; return; }
+  el.innerHTML = _transferRecHtml(md);
+  let rec = null; try { rec = recommendFreeTransfers(STATE.squad, md); } catch {}
+  if(rec && rec.unlimited){
+    el.innerHTML += `<div class="dim" style="font-size:12px;margin-top:8px">R32 is a free rebuild — open <a onclick="switchTab('optimizer')"><b>AI Team</b></a> for the fully-optimised knockout XI, then Save it as your team.</div>`;
+  }
+}
 function renderTransfers(){
   if(typeof prefillImportBox === 'function') prefillImportBox();
   if(typeof renderMyTeamBar === 'function') renderMyTeamBar();
+  renderThisGameweek();
+  // default the advanced planner to the CURRENT round (not MD1) until the user changes it
+  const psm = document.getElementById('plan-start-md');
+  if(psm){
+    if(!psm._initDone){ psm._initDone = true; psm.addEventListener('change', ()=>{ psm._touched = true; }); }
+    if(!psm._touched) psm.value = String(STATE.md);
+  }
   renderPlan();
   document.getElementById('tr-md').textContent = STATE.md;
   const hLbl = document.getElementById('tr-horizon-label');
@@ -6341,7 +6359,9 @@ function openPlayer(id){
 function closeDrawer(){ document.getElementById('drawer').classList.remove('open') }
 
 function toggleSquad(id){
-  if(STATE.squad.includes(id)){
+  const removing = STATE.squad.includes(id);
+  const pos = PLAYER_BY_ID[id]?.pos;
+  if(removing){
     STATE.squad = STATE.squad.filter(x=>x!==id);
   } else {
     if(STATE.squad.length>=15) return alert('Squad full (15)');
@@ -6357,9 +6377,28 @@ function toggleSquad(id){
     STATE.squad.push(id);
   }
   refresh();
-  openPlayer(id);
+  if(removing){
+    // Removing → go straight to picking a replacement: filter the pool to that position + scroll to it.
+    _poolPos = pos || 'ALL';
+    const seg = document.getElementById('pool-pos');
+    if(seg) seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on', x.dataset.pos===_poolPos));
+    if(typeof renderTeamPool === 'function') renderTeamPool();
+    if(typeof switchTab === 'function') switchTab('dashboard');
+    setTimeout(()=>{ document.getElementById('myteam-pool-wrap')?.scrollIntoView({behavior:'smooth', block:'start'}); }, 90);
+  }
 }
 function addToSquad(id){ toggleSquad(id); }
+// Apply recommended transfer(s) to the squad in one tap. spec = "outId:inId,outId:inId".
+function applyMoves(spec){
+  const pairs = String(spec).split(',').map(s=>s.split(':').map(Number)).filter(p=>p.length===2 && p.every(Number.isFinite));
+  let applied = 0;
+  pairs.forEach(([o,i])=>{ if(STATE.squad.includes(o) && PLAYER_BY_ID[i] && !STATE.squad.includes(i)){ STATE.squad = STATE.squad.map(x=>x===o?i:x); applied++; } });
+  if(!applied){ alert('These moves no longer apply to your current team.'); return; }
+  refresh();
+  if(typeof switchTab === 'function') switchTab('dashboard');
+  setTimeout(()=>document.getElementById('myteam-savebar')?.scrollIntoView({behavior:'smooth', block:'center'}), 90);
+}
+window.applyMoves = applyMoves;
 function togglePin(id){
   if(STATE.pins.has(id)) STATE.pins.delete(id); else STATE.pins.add(id);
   refresh();
@@ -10406,11 +10445,9 @@ function renderAll(){
     ['renderTransfers',renderTransfers], ['renderChips',renderChips],
     ['renderModelLab',renderModelLab], ['renderOptimizer',renderOptimizer],
     ['renderPerformance',renderPerformance], ['renderAlerts',renderAlerts],
-    ['renderHitCalc',renderHitCalc], ['renderInjurySim',renderInjurySim],
     ['renderTemplateDiff',renderTemplateDiff], ['renderSurprisePicks',renderSurprisePicks],
     ['renderTestResults',renderTestResults], ['renderChipStrategyPanel',renderChipStrategyPanel],
     ['renderTransferRoadmap',renderTransferRoadmap], ['renderTeamPool',renderTeamPool],
-    ['renderSaveSlots',renderSaveSlots],
   ];
   const errors = [];
   for(const [name, fn] of renderers){
@@ -10507,10 +10544,6 @@ const mtSave = document.getElementById('myteam-save'); if(mtSave) mtSave.onclick
 const mtReset = document.getElementById('myteam-reset'); if(mtReset) mtReset.onclick = resetToMyTeam;
 const rtb = document.getElementById('run-tests-btn');
 if(rtb) rtb.onclick = renderTestResults;
-document.getElementById('hit-calc').onclick = runHitCalc;
-const hitOut = document.getElementById('hit-out');
-if(hitOut) hitOut.onchange = repopulateHitIn;
-document.getElementById('inj-run').onclick = runInjurySim;
 document.getElementById('opt-apply').onclick = applyOptimized;
 document.getElementById('tr-free').oninput = renderTransfers;
 document.getElementById('tr-bank').oninput = renderTransfers;
