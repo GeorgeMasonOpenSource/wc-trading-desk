@@ -38,6 +38,12 @@
   nav.tabs button{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;padding:9px 12px;color:var(--ink2)}
   nav.tabs button:hover{color:var(--ink)}
   nav.tabs button.active{color:var(--acc);border-bottom-color:var(--acc)}
+  nav.tabs#primary-nav button{font-weight:600;font-size:13.5px;padding:11px 16px}
+  nav.subtabs{display:flex;gap:2px;padding:0 12px;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap;min-height:0}
+  nav.subtabs:empty{display:none}
+  nav.subtabs button{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;padding:7px 11px;color:var(--ink2);font-size:12.5px}
+  nav.subtabs button:hover{color:var(--ink)}
+  nav.subtabs button.active{color:var(--acc);border-bottom-color:var(--acc)}
   main{padding:14px}
   .page{display:none}
   .page.active{display:block}
@@ -196,20 +202,13 @@
   </div>
 </header>
 
-<nav class="tabs">
-  <button data-tab="dashboard" class="active">Dashboard</button>
-  <button data-tab="optimizer">Squad Optimizer</button>
-  <button data-tab="transfers">Transfer Planner</button>
-  <button data-tab="captaincy">Captaincy</button>
-  <button data-tab="chips">Chip Planner</button>
-  <button data-tab="players">Player Explorer</button>
-  <button data-tab="minutes">Minutes Lab</button>
-  <button data-tab="fdr">Fixture Difficulty</button>
-  <button data-tab="diff">Differential Edge</button>
-  <button data-tab="performance">Performance</button>
-  <button data-tab="alerts">Mins Alerts</button>
-  <button data-tab="model">Model Lab</button>
+<nav class="tabs" id="primary-nav">
+  <button data-group="decision" class="active">▶ Decision</button>
+  <button data-group="plan">Plan</button>
+  <button data-group="squad">Squad</button>
+  <button data-group="insights">Insights</button>
 </nav>
+<nav class="subtabs" id="sub-nav"></nav>
 
 <main>
 
@@ -218,7 +217,7 @@
   <div id="renderall-errors"></div>
   <div class="split2">
     <div class="panel">
-      <h2>Recommended Action — MD<span id="rec-md">1</span></h2>
+      <h2>Recommended Action — <span id="rec-md">MD1</span></h2>
       <div id="rec-list"></div>
     </div>
     <div class="panel">
@@ -240,7 +239,7 @@
   </div>
   <div style="height:12px"></div>
   <div class="panel">
-    <h2>⏱ Pivot Strategy — Kickoff Timing · MD<span id="pivot-md">1</span>
+    <h2>⏱ Pivot Strategy — Kickoff Timing · <span id="pivot-md">MD1</span>
       <span style="margin-left:10px;font-size:12px;font-weight:400;white-space:nowrap">
         <button onclick="stepMd(-1)" title="Previous gameweek" style="padding:2px 8px">‹ prev</button>
         <button onclick="stepMd(1)" title="Next gameweek" style="padding:2px 8px">next ›</button>
@@ -4535,7 +4534,7 @@ function refresh(){
 
 // ---------- RENDERING ----------
 function renderDashboard(){
-  document.getElementById('rec-md').textContent = STATE.md;
+  document.getElementById('rec-md').textContent = MD_LABEL(STATE.md);
   const recList = document.getElementById('rec-list');
   recList.innerHTML = '';
   // If the squad on screen is the model's suggestion (not the user's real team), say so loudly —
@@ -4632,12 +4631,12 @@ function renderDashboard(){
   const xiDeltaStr = xiDelta >= 0 ? `+${xiDelta.toFixed(1)}` : xiDelta.toFixed(1);
 
   tiles.innerHTML = `
-    <div class="tile" title="Your XI's projected xPts for MD${md}. Strict mode: only bookmaker-direct CS/xG + observed-data minutes + curated player stats. Heuristic axes (scout EV, non-curated tk/cc/sot) are zeroed."><div class="lbl">XI xPts · MD${md}</div><div class="v">${userXImd.toFixed(1)}</div><div class="delta ${xiDeltaCls}">${xiDeltaStr} vs $${STATE.budget}m optimum</div></div>
-    <div class="tile" title="Realistic ceiling — what the budget-constrained optimal squad's XI would score on MD${md}. Use as your anchor; ±2-3 pts of this means your squad is competitive."><div class="lbl">Benchmark · MD${md}</div><div class="v dim">${benchmarkMD.toFixed(1)}</div><div class="delta dim">optimizer's XI ($${STATE.budget}m)</div></div>
+    <div class="tile" title="Your XI's projected xPts for MD${md}. Strict mode: only bookmaker-direct CS/xG + observed-data minutes + curated player stats. Heuristic axes (scout EV, non-curated tk/cc/sot) are zeroed."><div class="lbl">XI xPts · ${MD_LABEL(md)}</div><div class="v">${userXImd.toFixed(1)}</div><div class="delta ${xiDeltaCls}">${xiDeltaStr} vs $${STATE.budget}m optimum</div></div>
+    <div class="tile" title="Realistic ceiling — what the budget-constrained optimal squad's XI would score on MD${md}. Use as your anchor; ±2-3 pts of this means your squad is competitive."><div class="lbl">Benchmark · ${MD_LABEL(md)}</div><div class="v dim">${benchmarkMD.toFixed(1)}</div><div class="delta dim">optimizer's XI ($${STATE.budget}m)</div></div>
     <div class="tile" title="Sum of all 15 players' projected xPts over the next 3 matchdays counting FORWARD from the current matchday (already-played MDs excluded). Bench at full weight."><div class="lbl">Squad xPts · next 3 MD</div><div class="v">${horiz.toFixed(0)}</div><div class="delta dim">all 15 · forward from MD${STATE.md}</div></div>
     <div class="tile" title="Sum of all 15 players' projected xPts across full tournament path (h=8), survival-weighted by R32/R16/QF/SF/F advance probabilities. Knockouts use Elo (bookies haven't priced KO yet)."><div class="lbl">Squad xPts · h=8</div><div class="v dim">${(STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean).reduce((a,p)=>a+projectHorizon(p,8).total,0)).toFixed(0)}</div><div class="delta dim">survival-weighted</div></div>
     <div class="tile"><div class="lbl">Spend</div><div class="v">$${spend.toFixed(1)}m</div><div class="delta dim">${(STATE.budget-spend).toFixed(1)}m bank</div></div>
-    <div class="tile"><div class="lbl">Squad · MD${md}</div><div class="v">${xPtsMD.toFixed(1)}</div><div class="delta dim">${squadPlayers.length}/15 incl bench</div></div>
+    <div class="tile"><div class="lbl">Squad · ${MD_LABEL(md)}</div><div class="v">${xPtsMD.toFixed(1)}</div><div class="delta dim">${squadPlayers.length}/15 incl bench</div></div>
     <div class="tile"><div class="lbl">Countries</div><div class="v">${new Set(squadPlayers.map(p=>p.team)).size}</div><div class="delta dim">max 3 per (h=3)</div></div>
     <div class="tile" title="Heuristic axes stripped: scout EV removed (Mystery Booster unverified), tk/cc/sot defaults zeroed for non-curated players, bonus_exp cut to 0.15. Bookmaker CS, team xG, MRI from observed minutes stay full-weight."><div class="lbl">Model mode</div><div class="v good" style="font-size:18px">STRICT</div><div class="delta dim">data-grounded only</div></div>
   `;
@@ -4928,7 +4927,7 @@ function renderPivotStrategy(){
   const el = document.getElementById('pivot-strategy-panel');
   if(!el) return;
   const md = STATE.md;
-  const pm = document.getElementById('pivot-md'); if(pm) pm.textContent = md;
+  const pm = document.getElementById('pivot-md'); if(pm) pm.textContent = MD_LABEL(md);
   const squad = STATE.squad.map(id=>PLAYER_BY_ID[id]).filter(Boolean);
   if(squad.length === 0){ el.innerHTML = '<div class="dim">Fill your squad to see pivot timing.</div>'; return; }
   // Group players by kickoff slot
@@ -9938,13 +9937,35 @@ window.computeOptimalChipPlan = computeOptimalChipPlan;
 window.renderChipStrategyPanel = renderChipStrategyPanel;
 
 // ---------- TAB SWITCHING ----------
+// Two-tier navigation: 4 primary groups, each with contextual sub-tabs. The old flat tab ids
+// are preserved as the page ids/data-tabs, so switchTab(<tab>) still works everywhere.
+const NAV_GROUPS = {
+  decision: { label:'Decision', tabs:[['dashboard','Decision Desk']] },
+  plan:     { label:'Plan',     tabs:[['transfers','Transfers'],['captaincy','Captaincy'],['chips','Chips']] },
+  squad:    { label:'Squad',    tabs:[['optimizer','Optimizer'],['players','Player Explorer']] },
+  insights: { label:'Insights', tabs:[['performance','Performance'],['minutes','Minutes Lab'],['fdr','Fixture Difficulty'],['diff','Differential Edge'],['alerts','Mins Alerts'],['model','Model Lab']] },
+};
+function groupOfTab(t){ return Object.keys(NAV_GROUPS).find(g=>NAV_GROUPS[g].tabs.some(([tab])=>tab===t)) || 'decision'; }
+function renderSubNav(group, activeTab){
+  const sub = document.getElementById('sub-nav'); if(!sub) return;
+  const tabs = NAV_GROUPS[group].tabs;
+  // A single-tab group needs no sub-nav row.
+  sub.innerHTML = tabs.length <= 1 ? '' :
+    tabs.map(([tab,label])=>`<button data-tab="${tab}" class="${tab===activeTab?'active':''}">${label}</button>`).join('');
+  sub.querySelectorAll('button').forEach(b=> b.onclick = ()=>switchTab(b.dataset.tab));
+}
+const _lastTabInGroup = {};   // remember the last tab visited per group
 function switchTab(t){
-  document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===t));
+  const group = groupOfTab(t);
+  _lastTabInGroup[group] = t;
+  document.querySelectorAll('#primary-nav button').forEach(b=>b.classList.toggle('active', b.dataset.group===group));
   document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active', p.id==='page-'+t));
+  renderSubNav(group, t);
   renderAll();
 }
-document.querySelectorAll('nav.tabs button').forEach(b=>{
-  b.onclick = ()=>switchTab(b.dataset.tab);
+// Clicking a primary group opens its last-used tab (or its first).
+document.querySelectorAll('#primary-nav button').forEach(b=>{
+  b.onclick = ()=>{ const g = b.dataset.group; switchTab(_lastTabInGroup[g] || NAV_GROUPS[g].tabs[0][0]); };
 });
 
 // ---------- RENDER ALL ----------
