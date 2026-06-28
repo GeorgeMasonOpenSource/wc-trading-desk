@@ -612,8 +612,8 @@ xPts = appearance_pts                          // P(60+)×2 + P(brief sub)×1
      + cc90 / 2  × adjMin                       // MID chances created
      + sot90 / 2 × adjMin                       // FWD shots on target
      + pen90 × 2 × adjMin                       // P(winning a pen) × 2
-     + 0.001 × adjMin × 9                       // GK goal (rare)
-     + 0.10 × 0.22 × adjMin × 3                 // GK pen save EV
+     + 0.001 × adjMin × 6                       // GK goal (rare, +6 official)
+     + 0.10 × 0.22 × adjMin × 5                 // GK pen save EV (+5 official)
      + bonus_exp + fk_bonus_exp + scouting_bonus_ev
      - 0.18 × adjMin × card_modifier            // yellow EV
      - 0.018 × adjMin × 2                       // red EV
@@ -3077,6 +3077,16 @@ function teamShareNorm(team){
   };
 }
 
+// Official FIFA World Cup 2026 Fantasy scoring constants — SINGLE SOURCE OF TRUTH. The projection
+// (projectXPts/projectGK) and the Monte-Carlo simulator (simulateInterval) both read these, so they
+// can't silently drift apart (they had: simulator used goal 7/6/5, pen-save +3, GK-goal +9).
+const SCORING = {
+  goal: {GK:6, DEF:6, MID:5, FWD:4},   // GK/DEF 6, MID 5, FWD 4
+  cleanSheet: {GK:5, DEF:5, MID:1, FWD:0},
+  assist: 3, penWon: 2, penSave: 5, gkGoal: 6,
+  yellow: -1, redCard: -2, scout: 2,
+};
+
 // ---------- CALIBRATION (results feedback loop) ----------
 // Per-position multiplicative correction LEARNED from realized results: scale = Σactual / Σraw_proj
 // over completed rounds (the Performance tab already pairs projections with actuals). Shrunk toward
@@ -3158,7 +3168,7 @@ function projectXPts(p, md, raw){
   // POINTS by position — official FIFA Fantasy 2026 rules (same scoring as UEFA EURO Fantasy):
   // goal = 6 (GK/DEF), 5 (MID), 4 (FWD). Cross-verified June 2026 against multiple guides
   // summarizing play.fifa.com/fantasy/help (Yahoo, bet365, FantasyFootballScout, AllAboutFPL).
-  const goalPts = p.pos==='DEF'?6 : p.pos==='MID'?5 : 4;     // GK handled in projectGK
+  const goalPts = SCORING.goal[p.pos];     // GK handled in projectGK
   const csPts  = p.pos==='DEF'?5 : p.pos==='MID'?1 : 0;      // Corrected: DEF=5 (was 4)
   // Appearance: P(plays 60+)*2 + P(brief sub)*1 ; bench → 0
   const appPts = 2 * adjMin90 + 1 * (1 - adjMin90) * 0.30;
@@ -3191,8 +3201,8 @@ function projectXPts(p, md, raw){
   // Winning a penalty: +2. Mostly attackers who draw fouls in box.
   const pen90 = lookupPenDrawn90(p);
   const penWonPts = pen90 * 2 * adjMin90;
-  // Red card tail: -3 (official, EURO-style scoring) × ~2% per match
-  const redPts = -3 * 0.018 * adjMin90;
+  // Red card tail: -2 (official FIFA World Cup 2026 Fantasy) × ~2% per match
+  const redPts = SCORING.redCard * 0.018 * adjMin90;
 
   // STRICT MODE — bonus_exp held at 0.15. Asymmetric cuts (where DEF gets less of the cut
   // than MID/FWD because their bonus is CS-driven, not goal-driven) would distort optimizer
@@ -3268,9 +3278,9 @@ function projectGK(p, md, raw){
   const concedePen = -1 * expConcedeAbove1;
   const savePts = savesExp / 3;
   // GK goal scored (very rare, +6 official): use ~0.001 per 90 baseline
-  const gkGoalPts = 0.001 * adjMin90 * 6;
-  // Penalty save: +5 (official, EURO-style scoring). P(pen faced) × P(save) — 0.10 pens/g × 22% saved
-  const penSavePts = 0.10 * 0.22 * adjMin90 * 5;
+  const gkGoalPts = 0.001 * adjMin90 * SCORING.gkGoal;
+  // Penalty save: +5 (official). P(pen faced) × P(save) — 0.10 pens/g × 22% saved
+  const penSavePts = 0.10 * 0.22 * adjMin90 * SCORING.penSave;
   const bonusExp = adjMin90 * teamCsProb * 0.5;    // restored — variance handled by uniform 0.87× deflator
   const cardPen = -0.03 * adjMin90;                     // GKs rarely booked
   // SCOUTING BONUS (official): +2 if owned <5% and scores 4+ pts. For a GK a clean sheet
@@ -3784,9 +3794,9 @@ function _simMatch(p, md){
     if(mins>=60 && teamGA===0) pts += 5;
     pts -= Math.max(0, teamGA - 1);
     pts += Math.floor(saves/3);
-    if(Math.random() < 0.10 * adjMin && Math.random() < 0.22) pts += 3; // pen save
-    if(Math.random() < 0.001 * adjMin) pts += 9; // GK goal
-    if(Math.random() < 0.03 * adjMin) pts -= 1; // yellow
+    if(Math.random() < 0.10 * adjMin && Math.random() < 0.22) pts += SCORING.penSave; // pen save (+5; was +3)
+    if(Math.random() < 0.001 * adjMin) pts += SCORING.gkGoal; // GK goal (+6; was +9)
+    if(Math.random() < 0.03 * adjMin) pts += SCORING.yellow; // yellow
     return pts;
   }
   // Outfield
@@ -3801,19 +3811,19 @@ function _simMatch(p, md){
   const sot = p.pos==='FWD' ? _poisson(lookupSot90(p)*adjMin) : 0;
   const penWon = _poisson(lookupPenDrawn90(p)*adjMin);
   const teamGA = _poisson(teamXGA * adjMin);
-  const goalPts = {DEF:7, MID:6, FWD:5}[p.pos];
-  const csPts = {DEF:5, MID:1, FWD:0}[p.pos];
+  const goalPts = SCORING.goal[p.pos];   // was 7/6/5; official 6/5/4
+  const csPts = SCORING.cleanSheet[p.pos];
   let pts = mins>=60 ? 2 : 1;
   pts += (goals + pkGoals + fkGoals) * goalPts;
   pts += fkGoals * 1;
-  pts += assists * 3;
+  pts += assists * SCORING.assist;
   if(mins>=60 && teamGA===0) pts += csPts;
   if(p.pos==='DEF') pts -= Math.max(0, teamGA - 1);
   pts += Math.floor(tackles/3) + Math.floor(chances/2) + Math.floor(sot/2);
-  pts += penWon * 2;
-  if(Math.random() < 0.18 * adjMin) pts -= 1;
-  if(Math.random() < 0.018 * adjMin) pts -= 2;
-  if(p.own < 0.05 && pts > 4) pts += 2;
+  pts += penWon * SCORING.penWon;
+  if(Math.random() < 0.18 * adjMin) pts += SCORING.yellow;
+  if(Math.random() < 0.018 * adjMin) pts += SCORING.redCard;
+  if(p.own < 0.05 && pts > 4) pts += SCORING.scout;
   return pts;
 }
 function simulateInterval(p, md, n=200){
@@ -9313,6 +9323,13 @@ const TEST_SUITE = [
   },
   { name: 'All 48 teams present',
     fn: () => Object.keys(TEAMS).length === 48 ? {pass:true} : {pass:false, msg:`only ${Object.keys(TEAMS).length} teams`}
+  },
+  { name: 'Official scoring constants (goal 6/6/5/4, CS 5/5/1, assist 3, redCard -2, penSave +5, gkGoal +6)',
+    fn: () => { const s = SCORING;
+      const okGoal = s.goal.GK===6 && s.goal.DEF===6 && s.goal.MID===5 && s.goal.FWD===4;
+      const okCs = s.cleanSheet.GK===5 && s.cleanSheet.DEF===5 && s.cleanSheet.MID===1;
+      const okMisc = s.assist===3 && s.penWon===2 && s.penSave===5 && s.gkGoal===6 && s.yellow===-1 && s.redCard===-2 && s.scout===2;
+      return (okGoal && okCs && okMisc) ? {pass:true} : {pass:false, msg:`goal ${okGoal} cs ${okCs} misc ${okMisc}`}; }
   },
   { name: 'Calibration is identity with no actuals',
     fn: () => { const c = computeCalibration({}); return (c.GK===1 && c.DEF===1 && c.MID===1 && c.FWD===1) ? {pass:true} : {pass:false, msg:`got ${JSON.stringify(c)}`}; }
