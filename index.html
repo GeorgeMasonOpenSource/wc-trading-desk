@@ -3398,8 +3398,24 @@ function projectHorizon(p, horizon){
   return {total: round1(total), breakdown};
 }
 
+// Elo expected score (win=1, draw=0.5, loss=0) ≈ P(advance past a single KO opponent).
+function _eloAdvance(ownElo, oppElo){ return 1/(1+Math.pow(10,(oppElo-ownElo)/400)); }
 function computeSurvival(team){
   const t = TEAMS[team];
+  // DATA-GROUNDED: once the knockout bracket is known (KNOCKOUTS populated by the refresh job),
+  // survival is anchored to reality instead of pre-tournament priors — teams that didn't reach the
+  // R32 are out (0), teams in it are CERTAIN to play R32, and the next round uses the real opponent's
+  // Elo. (Pre-knockouts, fall through to the group-advance model below.)
+  if(typeof KNOCKOUTS !== 'undefined' && Object.keys(KNOCKOUTS).length){
+    const ko = KNOCKOUTS[team];
+    if(!ko || !ko.R32) return {R32:0, R16:0, QF:0, SF:0, F:0};   // eliminated in the group stage
+    const oppElo = (ko.R32.opp && TEAMS[ko.R32.opp]) ? TEAMS[ko.R32.opp].elo : 1850;
+    const pR16 = _eloAdvance(t.elo, oppElo);                      // win the (known) R32 tie → reach R16
+    const pQF  = pR16 * Math.max(0.20, _eloAdvance(t.elo, 1900)); // later opponents unknown → tier Elo
+    const pSF  = pQF  * Math.max(0.18, _eloAdvance(t.elo, 1950));
+    const pF   = pSF  * Math.max(0.15, _eloAdvance(t.elo, 2000));
+    return {R32:1.0, R16:pR16, QF:pQF, SF:pSF, F:pF};
+  }
   const groupCodes = Object.entries(TEAMS).filter(([_,x])=>x.group===t.group).map(([c,_])=>c);
   // probability of finishing in top 3 of group (32 of 48 advance)
   const others = groupCodes.filter(c=>c!==team).map(c=>TEAMS[c].elo);
@@ -9456,6 +9472,17 @@ const TEST_SUITE = [
       const okCs = s.cleanSheet.GK===5 && s.cleanSheet.DEF===5 && s.cleanSheet.MID===1;
       const okMisc = s.assist===3 && s.penWon===2 && s.penSave===3 && s.gkGoal===9 && s.yellow===-1 && s.redCard===-2 && s.ownGoal===-2 && s.scout===2;
       return (okGoal && okCs && okMisc) ? {pass:true} : {pass:false, msg:`goal ${okGoal} cs ${okCs} misc ${okMisc}`}; }
+  },
+  { name: 'Survival anchored to the real bracket once knockouts resolve',
+    fn: () => {
+      const koTeams = (typeof KNOCKOUTS !== 'undefined') ? Object.keys(KNOCKOUTS).filter(k=>KNOCKOUTS[k]&&KNOCKOUTS[k].R32) : [];
+      if(!koTeams.length) return {pass:true};   // pre-knockouts: nothing to anchor yet
+      const alive = computeSurvival(koTeams[0]);
+      if(Math.abs(alive.R32 - 1) > 1e-9) return {pass:false, msg:`${koTeams[0]} in R32 but survival.R32=${alive.R32}`};
+      const out = Object.keys(TEAMS).find(c=>!koTeams.includes(c));
+      if(out){ const s = computeSurvival(out); if(s.R32 !== 0) return {pass:false, msg:`${out} eliminated but survival.R32=${s.R32}`}; }
+      return {pass:true};
+    }
   },
   { name: 'Calibration is identity with no actuals',
     fn: () => { const c = computeCalibration({}); return (c.GK===1 && c.DEF===1 && c.MID===1 && c.FWD===1) ? {pass:true} : {pass:false, msg:`got ${JSON.stringify(c)}`}; }
