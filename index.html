@@ -180,6 +180,25 @@
   details[open] summary{color:var(--ink);margin-bottom:6px}
   /* match-day tool accordions on the Decision page */
   .section-label{font-size:12px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink3);margin:0 0 10px 2px}
+  /* My Team builder: pitch + Players pool side-by-side (FPL-Hub-style) */
+  .myteam-grid{display:grid;grid-template-columns:1.15fr 0.85fr;gap:18px;align-items:start}
+  @media(max-width:900px){.myteam-grid{grid-template-columns:1fr}}
+  #myteam-pool-wrap{min-width:0}
+  .pool-head{font-size:14px;font-weight:700;margin-bottom:8px}
+  .pool-controls{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center}
+  .pool-controls .seg button{padding:4px 8px;font-size:11px}
+  .pool-controls select,.pool-controls input{font-size:12px;padding:5px 7px}
+  .pool-controls #pool-search{flex:1;min-width:120px}
+  #myteam-pool{max-height:520px;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
+  .pool-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+  .pool-row:last-child{border-bottom:none}
+  .pool-row:hover{background:var(--panel2)}
+  .pool-row .pr-main{flex:1;min-width:0}
+  .pool-row .pr-name{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pool-row .pr-sub{font-size:10.5px;color:var(--ink2)}
+  .pool-row .pr-pred{font-family:var(--mono);font-weight:700;font-size:13px;min-width:34px;text-align:right}
+  .pool-row .pr-add{width:24px;height:24px;border-radius:50%;padding:0;font-size:14px;flex:none}
+  .pool-row.owned{opacity:.55}
   /* this-round directive banner */
   .directive-card{background:linear-gradient(135deg,rgba(62,224,160,.12),rgba(106,169,255,.08) 60%,transparent),var(--panel);
     border:1px solid var(--line2);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow)}
@@ -300,20 +319,39 @@
 <section class="page active" id="page-dashboard">
   <div id="renderall-errors"></div>
   <div id="directive"></div>
-  <div class="split2">
-    <div class="panel">
-      <h2>Recommended Action — <span id="rec-md">MD1</span></h2>
-      <div id="rec-list"></div>
-    </div>
-    <div class="panel">
-      <h2>👕 My Team <span id="myteam-headcount" class="dim" style="font-size:13px;font-weight:400;margin-left:6px"></span></h2>
-      <div class="tiles" id="snap-tiles"></div>
-      <hr>
-      <div class="pitch" id="pitch"></div>
-      <div id="myteam-savebar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
-        <button class="primary" onclick="saveMyTeam()" style="font-size:14px;padding:10px 18px">💾 Save my team</button>
-        <button onclick="resetToMyTeam()" style="font-size:14px;padding:10px 16px">↺ Load saved team</button>
-        <span class="myteam-status dim" style="font-size:12px"></span>
+  <div class="panel">
+    <h2>Recommended Action — <span id="rec-md">MD1</span></h2>
+    <div id="rec-list"></div>
+  </div>
+  <div class="panel">
+    <h2>👕 My Team <span id="myteam-headcount" class="dim" style="font-size:13px;font-weight:400;margin-left:6px"></span></h2>
+    <div class="tiles" id="snap-tiles"></div>
+    <hr>
+    <div class="myteam-grid">
+      <div>
+        <div class="pitch" id="pitch"></div>
+        <div id="myteam-savebar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+          <button class="primary" onclick="saveMyTeam()" style="font-size:14px;padding:10px 18px">💾 Save my team</button>
+          <button onclick="resetToMyTeam()" style="font-size:14px;padding:10px 16px">↺ Load saved team</button>
+          <span class="myteam-status dim" style="font-size:12px"></span>
+        </div>
+      </div>
+      <div id="myteam-pool-wrap">
+        <div class="pool-head">Players <span class="dim" id="pool-count" style="font-size:11px;font-weight:400"></span></div>
+        <div class="pool-controls">
+          <div class="seg" id="pool-pos">
+            <button data-pos="ALL" class="on">All</button><button data-pos="GK">GK</button><button data-pos="DEF">DEF</button><button data-pos="MID">MID</button><button data-pos="FWD">FWD</button>
+          </div>
+          <select id="pool-sort">
+            <option value="xptsMD">Sort: predicted pts</option>
+            <option value="value">Sort: value</option>
+            <option value="price">Sort: price</option>
+            <option value="own">Sort: selected %</option>
+          </select>
+          <label class="pool-price">Max $<input id="pool-maxprice" type="number" value="14" step="0.5" style="width:54px">m</label>
+          <input id="pool-search" type="text" placeholder="Search player / country…">
+        </div>
+        <div id="myteam-pool"></div>
       </div>
     </div>
   </div>
@@ -5437,6 +5475,34 @@ function shortName(n){
 
 // ---------- PLAYER TABLE ----------
 let pSortCol='xptsHor', pSortDir=-1, pPosFilter='ALL';
+// FPL-Hub-style player pool on the My Team page: filter by position/price/search, sort by the
+// current round's predicted points (single GW), tap a row for the full player breakdown (drawer),
+// or + to add. Lean list (top 60) for snappy scrolling.
+let _poolPos='ALL', _poolSort='xptsMD', _poolSearch='';
+function renderTeamPool(){
+  const el = document.getElementById('myteam-pool'); if(!el) return;
+  const md = STATE.md;
+  const maxPrice = parseFloat(document.getElementById('pool-maxprice')?.value) || 14;
+  let rows = PLAYERS.map(p=>{ const r = projectXPts(p, md); return {...p, xptsMD:r?.xpts||0, opp:r?.fx?.opp, value:projectHorizon(p,3).total/Math.max(0.1,p.price)}; });
+  rows = rows.filter(p=>{
+    if(_poolPos!=='ALL' && p.pos!==_poolPos) return false;
+    if(p.price > maxPrice) return false;
+    if(_poolSearch){ const hay=(p.name+' '+p.team+' '+TEAMS[p.team].name).toLowerCase(); if(!hay.includes(_poolSearch)) return false; }
+    return true;
+  });
+  rows.sort((a,b)=> _poolSort==='price' ? a.price-b.price : (b[_poolSort]-a[_poolSort]));
+  const total = rows.length; rows = rows.slice(0, 60);
+  const cnt = document.getElementById('pool-count'); if(cnt) cnt.textContent = `(${Math.min(60,total)} of ${total})`;
+  el.innerHTML = rows.map(p=>{
+    const owned = STATE.squad.includes(p.id);
+    const oppTxt = p.opp ? `vs ${p.opp}` : MD_LABEL(md);
+    return `<div class="pool-row ${owned?'owned':''}" onclick="openPlayer(${p.id})">
+      <div class="pr-main"><div class="pr-name">${p.name}</div><div class="pr-sub"><span class="pos-${p.pos}">${p.pos}</span> · ${p.team} ${oppTxt} · $${p.price.toFixed(1)}m · ${(p.own*100).toFixed(0)}% sel</div></div>
+      <div class="pr-pred good" title="Predicted points, ${MD_LABEL(md)}">${p.xptsMD.toFixed(1)}</div>
+      ${owned ? '<span class="pr-add dim" title="In your team">✓</span>' : `<button class="pr-add" title="Add to team" onclick="event.stopPropagation();addToSquad(${p.id});refresh()">+</button>`}
+    </div>`;
+  }).join('');
+}
 function renderPlayers(){
   const search = document.getElementById('p-search').value.toLowerCase().trim();
   const maxPrice = parseFloat(document.getElementById('p-maxprice').value);
@@ -10343,7 +10409,7 @@ function renderAll(){
     ['renderHitCalc',renderHitCalc], ['renderInjurySim',renderInjurySim],
     ['renderTemplateDiff',renderTemplateDiff], ['renderSurprisePicks',renderSurprisePicks],
     ['renderTestResults',renderTestResults], ['renderChipStrategyPanel',renderChipStrategyPanel],
-    ['renderTransferRoadmap',renderTransferRoadmap],
+    ['renderTransferRoadmap',renderTransferRoadmap], ['renderTeamPool',renderTeamPool],
     ['renderSaveSlots',renderSaveSlots],
   ];
   const errors = [];
@@ -10418,6 +10484,13 @@ document.getElementById('p-search').oninput = ()=>renderPlayers();
 document.getElementById('p-maxprice').onchange = ()=>renderPlayers();
 { const mo=document.getElementById('p-minown'); if(mo) mo.oninput = ()=>renderPlayers();
   const af=document.getElementById('p-affordable'); if(af) af.onchange = ()=>renderPlayers(); }
+// My Team player-pool controls
+{ const seg=document.getElementById('pool-pos');
+  if(seg) seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{ seg.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); _poolPos=b.dataset.pos; renderTeamPool(); });
+  const so=document.getElementById('pool-sort'); if(so) so.onchange=()=>{ _poolSort=so.value; renderTeamPool(); };
+  const mp=document.getElementById('pool-maxprice'); if(mp) mp.oninput=()=>renderTeamPool();
+  const se=document.getElementById('pool-search'); if(se) se.oninput=()=>{ _poolSearch=se.value.toLowerCase().trim(); renderTeamPool(); };
+}
 document.querySelectorAll('#p-pos-seg button').forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll('#p-pos-seg button').forEach(x=>x.classList.remove('on'));
