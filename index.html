@@ -485,7 +485,7 @@
   <details class="tool">
     <summary>Advanced planning — full multi-round plan, single-MD scenarios, what-if</summary>
   <div class="panel">
-    <h2>Multi-MD Transfer Plan ("Cheat Code")</h2>
+    <h2>Multi-MD Transfer Plan</h2>
     <div class="dim" style="margin-bottom:10px;font-size:12px">Greedy per-MD optimizer respecting FT allocation (2/MD + carry 1), hit costs (-3 per extra transfer), country caps escalating by stage, and chip availability. Plan recomputes from your current squad whenever you click "Recompute".</div>
     <div class="row" style="margin-bottom:10px;gap:8px;align-items:center;flex-wrap:wrap">
       <label>Plan from MD: <select id="plan-start-md"><option value="1">MD1</option><option value="2">MD2</option><option value="3">MD3</option><option value="R32">R32</option><option value="R16">R16</option><option value="QF">QF</option><option value="SF">SF</option></select></label>
@@ -704,7 +704,7 @@
         <div class="dim" style="margin-top:8px;font-size:12px;line-height:1.6">
         <p><b style="color:var(--warn)">⚠️ Honest disclosure:</b> not all "xG" numbers are real xG. Here's exactly what's modeled vs sourced.</p>
         <table style="font-size:11.5px;margin-top:8px"><thead><tr><th>Metric</th><th>Source</th><th>Type</th></tr></thead><tbody>
-        <tr><td><b>teamXG (group MD1-3)</b></td><td>Bookmaker-derived from DraftKings Team Total Goals market (via ESPN propBets) — Poisson-solved from over-1.5 odds</td><td><span class="good">Bookmaker-direct</span></td></tr>
+        <tr><td><b>teamXG (group + knockouts)</b></td><td>Bookmaker-derived from DraftKings Team Total Goals market (via ESPN propBets) — Poisson-solved from over-1.5 odds. Knockout rounds are priced the same way as soon as bookies list them (the 6-hourly refresh picks them up); until then the Elo model fills in.</td><td><span class="good">Bookmaker-direct when priced</span></td></tr>
         <tr><td><b>teamXGA</b></td><td>Opp team-xG from same market (mirror image)</td><td><span class="good">Bookmaker-direct</span></td></tr>
         <tr><td><b>Clean-sheet probability</b></td><td>Bookmaker-direct from DraftKings Team Clean Sheet market — devigged where over+under present (~130/144 team-MDs)</td><td><span class="good">Bookmaker-direct</span></td></tr>
         <tr><td><b>BTTS probability</b></td><td>Bookmaker-direct from DraftKings Both Teams To Score</td><td><span class="good">Bookmaker-direct</span></td></tr>
@@ -714,7 +714,7 @@
         <tr><td><b>team Elo / att / def</b></td><td>Hand-calibrated from eloratings.net May 2026 snapshot — only used in KO rounds + fallback</td><td><span class="warn">Heuristic (fallback only)</span></td></tr>
         <tr><td><b>Player goal-share (gs)</b></td><td>Computed: <code>0.12-0.37 by position × price tier within squad</code></td><td><span class="bad">Modeled (price-tier proxy)</span></td></tr>
         <tr><td><b>Player assist-share (as)</b></td><td>Same: price-tier proxy by position</td><td><span class="bad">Modeled</span></td></tr>
-        <tr><td><b>Player tk90 / cc90 / sot90</b></td><td>Hand-curated for ~80 marquee players; position+price-tier defaults for rest. <b style="color:var(--bad)">NOT</b> from bookies — player props (anytime scorer, tackles, SOT) are not in ESPN's free feed; we'd need a paid API (api-football / Opta) which is out of scope.</td><td><span class="warn">Partial-curated</span></td></tr>
+        <tr><td><b>Player tk90 / cc90 / sot90</b></td><td>Hand-curated per-90s for ~80 marquee players. Everyone else: chances-created and shots-on-target fall back to a <b>profile prior scaled to that player's own modelled involvement</b> (assist share → chances, goal share → SOT, calibrated against the curated set); tackles have no reliable proxy and stay curated-only (0 otherwise). <b style="color:var(--bad)">NOT</b> from bookies — player props are not in ESPN's free feed; a paid API (api-football / Opta) is out of scope.</td><td><span class="warn">Curated + profile prior</span></td></tr>
         <tr><td><b>Pen-drawn rate</b></td><td>Hand-curated for ~25 known pen-drawers; 0.01-0.06 default</td><td><span class="warn">Partial-curated</span></td></tr>
         <tr><td><b>PK / FK taker share</b></td><td>Hand-curated for ~40 known set-piece takers; 0 for rest</td><td><span class="warn">Partial-curated</span></td></tr>
         <tr><td><b>MRI (Minutes Reliability)</b></td><td>Observed start rate from last 5 internationals (ESPN) + premium-price floor + manual news overrides</td><td><span class="good">Observed + curated</span></td></tr>
@@ -3403,7 +3403,10 @@ function projectXPts(p, md, raw){
   // raw=true so the calibration fit trains on the unadjusted model, not its own output.
   const cf = raw ? 1 : (calFactor(p.pos) * formFactor(p));
   xpts *= cf;
-  const components = {appearance:appPts*0.87, goals:(gPts+pkPts)*0.87, assists:aPts*0.87, cs:cPts*0.87, concede:conPts, tackles:tkPts*0.87, chances:ccPts*0.87, sot:sotPts*0.87, penWon:penWonPts*0.87, bonus:bonusExp*0.87, scout:scoutEV, cards:cardPen + redPts};
+  // Every term in the total is deflated ×0.87 (it's applied to the sum above), so the displayed
+  // breakdown must deflate uniformly too — concede/scout/cards were shown undeflated, making the
+  // drawer's components sum exceed the headline xPts.
+  const components = {appearance:appPts*0.87, goals:(gPts+pkPts)*0.87, assists:aPts*0.87, cs:cPts*0.87, concede:conPts*0.87, tackles:tkPts*0.87, chances:ccPts*0.87, sot:sotPts*0.87, penWon:penWonPts*0.87, bonus:bonusExp*0.87, scout:scoutEV*0.87, cards:(cardPen + redPts)*0.87};
   for(const k in components) components[k] = round1(components[k] * cf);
   return {
     xpts: round1(xpts),
@@ -3966,9 +3969,14 @@ function _simMatch(p, md){
   else mins = 0;
   if(mins === 0) return 0;
   const adjMin = mins/90;
+  // SAME fixture environment as the deterministic projection: market-derived team totals when the
+  // round is priced, bookie Poisson fit next, Elo last. The simulator previously used Elo-only xG,
+  // so its distribution was centred on a different mean than the projection whenever odds existed.
   const baseXG = 1.30;
-  const teamXG = baseXG * (t.att/fx.def) + fx.home;
-  const teamXGA = baseXG * (fx.att/t.def);
+  const market = BOOKIE_MARKETS[p.team]?.[md];
+  const bookie = BOOKIE_XG[p.team]?.[md];
+  const teamXG = market?.xg ?? bookie?.teamXG ?? (baseXG * (t.att/fx.def) + fx.home);
+  const teamXGA = market?.opp_xg ?? bookie?.oppXG ?? (baseXG * (fx.att/t.def));
   // GK separate
   if(p.pos==='GK'){
     const teamGA = _poisson(teamXGA);
@@ -3979,13 +3987,19 @@ function _simMatch(p, md){
     pts -= Math.max(0, teamGA - 1);
     pts += Math.floor(saves/3);
     if(Math.random() < 0.10 * adjMin && Math.random() < 0.22) pts += SCORING.penSave; // pen save (+3 official)
-    if(Math.random() < 0.001 * adjMin) pts += SCORING.gkGoal; // GK goal (+6; was +9)
+    if(Math.random() < 0.001 * adjMin) pts += SCORING.gkGoal; // GK goal (+9 official)
     if(Math.random() < 0.03 * adjMin) pts += SCORING.yellow; // yellow
     return pts;
   }
-  // Outfield
-  const goals = _poisson(teamXG * p.gs * adjMin);
-  const assists = _poisson(teamXG * p.as * adjMin);
+  // Outfield — shares drawn against OPEN-PLAY xG with the same team-share normalization as
+  // projectXPts. The old code drew goals from FULL teamXG (which contains penalties) AND added
+  // pkAtt on top — double-counting pens for designated takers — and skipped norm entirely,
+  // re-introducing the stacked-squad share inflation the projection already corrects.
+  const pkTeamGoals = 0.12 * (t.att/85) * 0.78;
+  const openXG = Math.max(0.2, teamXG - pkTeamGoals - 0.05);
+  const norm = teamShareNorm(p.team);
+  const goals = _poisson(openXG * p.gs * norm.g * adjMin);
+  const assists = _poisson(openXG * p.as * norm.a * adjMin);
   const pkAtt = _poisson(0.12 * (t.att/85) * p.pt * adjMin);
   let pkGoals = 0;
   for(let i=0;i<pkAtt;i++) if(Math.random()<0.78) pkGoals++;
@@ -4029,9 +4043,9 @@ function simulateInterval(p, md, n=200){
   return result;
 }
 function simulateHorizonInterval(p, horizon, n=200){
-  const mds = horizon<=3 ? [1,2,3].slice(0,horizon)
-            : horizon<=6 ? [1,2,3,'R32','R16'].slice(0, horizon-1)
-            : [1,2,3,'R32','R16','QF','SF','F'];
+  // horizon = number of matchdays INCLUSIVE from MD1 (4 = through R32, 5 = through R16, …).
+  // The old `slice(0, horizon-1)` dropped one round: horizon 4 simulated only MD1-3.
+  const mds = ['1','2','3','R32','R16','QF','SF','F'].slice(0, Math.max(1, horizon)).map(m=>/^[1-3]$/.test(m)?+m:m);
   const survivalProbs = computeSurvival(p.team);
   const totals = [];
   for(let i=0;i<n;i++){
@@ -4804,10 +4818,19 @@ function computeRecommendation(){
   if(squad.length < 1){ STATE.captainId = STATE.viceId = null; STATE._recXIIds = []; STATE._recCapXpts = 0; return; }
   const xi = chooseXI(squad, 'xptsMD').filter(Boolean);
   const ranked = [...xi].sort((a,b)=>b.xptsMD - a.xptsMD);
-  STATE.captainId   = ranked[0]?.id ?? null;
-  STATE.viceId      = ranked[1]?.id ?? null;
+  // The MODEL's pick always lives in _recCapId; STATE.captainId is the USER's armband. A saved
+  // user captain must never be silently clobbered by the recommendation (it was — every refresh
+  // overwrote it, so the baked/saved captain never survived a render cycle). Adopt the model pick
+  // only when there is no valid user choice to respect.
+  STATE._recCapId   = ranked[0]?.id ?? null;
+  STATE._recViceId  = ranked[1]?.id ?? null;
   STATE._recXIIds   = xi.map(p=>p.id);
   STATE._recCapXpts = ranked[0]?.xptsMD ?? 0;
+  const userCapValid = STATE.squadSource === 'user' && STATE.captainId && STATE.squad.includes(STATE.captainId);
+  if(!userCapValid){ STATE.captainId = STATE._recCapId; STATE.viceId = STATE._recViceId; }
+  else if(!STATE.viceId || !STATE.squad.includes(STATE.viceId) || STATE.viceId === STATE.captainId){
+    STATE.viceId = ranked.find(p=>p.id !== STATE.captainId)?.id ?? null;
+  }
 }
 function refresh(){
   document.getElementById('conn-md').value = STATE.md;
@@ -5387,8 +5410,15 @@ function renderPitch(){
   // Bench order: backup GK first, then outfield by xptsMD descending (FPL auto-sub rule)
   const bench = orderBench(benchRaw, 'xptsMD');
   const xiByMD = [...xi].sort((a,b)=>b.xptsMD-a.xptsMD);
-  STATE.captainId = xiByMD[0]?.id;
-  STATE.viceId = xiByMD[1]?.id;
+  // Preserve the USER's armband (same rule as computeRecommendation) — the pitch used to force
+  // captain = top projected XI player on every render, erasing the saved choice.
+  const _userCapValid = STATE.squadSource === 'user' && STATE.captainId && squad.some(p=>p && p.id===STATE.captainId);
+  if(!_userCapValid){
+    STATE.captainId = xiByMD[0]?.id;
+    STATE.viceId = xiByMD[1]?.id;
+  } else if(!STATE.viceId || !squad.some(p=>p && p.id===STATE.viceId) || STATE.viceId === STATE.captainId){
+    STATE.viceId = xiByMD.find(p=>p.id !== STATE.captainId)?.id;
+  }
   // invalidate optimizer cache on squad changes
   window._optCache = null;
   const fmt = (p, isBench=false)=>{
@@ -5445,7 +5475,21 @@ function renderPitch(){
   while(mids.length<2) mids.push(null);
   while(fwds.length<1) fwds.push(null);
 
+  // If the user's armband differs from the model's pick, say so — with the EV cost — instead of
+  // silently swapping it (the old behaviour) or silently ignoring the gap.
+  let capAdvisory = '';
+  if(_userCapValid && STATE._recCapId && STATE.captainId !== STATE._recCapId){
+    const uc = squad.find(p=>p && p.id===STATE.captainId);
+    const mc = PLAYER_BY_ID[STATE._recCapId];
+    const ucX = uc ? (projectXPts(uc, md)?.xpts || 0) : 0;
+    const mcX = STATE._recCapXpts || 0;
+    if(mc && (mcX - ucX) > 0.8){
+      capAdvisory = `<div class="rec warn" style="margin-bottom:8px"><div><div class="title">Ⓒ ${uc?uc.name:'Your captain'} is your armband — model prefers <b>${mc.name}</b></div><div class="sub">${mc.name} projects ${mcX.toFixed(1)} vs ${ucX.toFixed(1)} xPts — the doubled armband on him is worth <b>+${(mcX-ucX).toFixed(1)}</b> extra. <a style="cursor:pointer;color:var(--acc2)" onclick="setCaptain(${mc.id})">Make ${mc.name.split(' ').pop()} captain →</a></div></div><div class="ev mono">+${(mcX-ucX).toFixed(1)}</div></div>`;
+    }
+  }
+
   pitch.innerHTML = `
+    ${capAdvisory}
     <div class="pitch-row">${fwds.map(p=>fmt(p)).join('')}</div>
     <div class="pitch-row">${mids.map(p=>fmt(p)).join('')}</div>
     <div class="pitch-row">${defs.map(p=>fmt(p)).join('')}</div>
@@ -5642,7 +5686,7 @@ function renderFDR(){
   const tbl = document.getElementById('fdr-table');
   const note = document.getElementById('fdr-note');
   if(note) note.innerHTML = /^[1-3]$/.test(String(STATE.md)) ? ''
-    : '<div class="dim" style="margin-bottom:8px"><span class="warn">●</span> Fixture difficulty is a group-stage tool — the group MD1-3 matchups below are shown for reference. Knockout matchups are single-elimination (see the Decision desk for the live R32+ bracket).</div>';
+    : '<div class="dim" style="margin-bottom:8px"><span class="warn">●</span> Fixture difficulty is a group-stage tool — the group MD1-3 matchups below are kept for reference. Knockout matchups are single-elimination; the current round\'s real opponents drive the projections on My Team and AI Transfers.</div>';
   const rows = Object.keys(TEAMS).sort((a,b)=>TEAMS[b].elo-TEAMS[a].elo);
   tbl.innerHTML = `
     <thead><tr><th>Team</th><th>Grp</th><th class="num">Elo</th><th>MD1</th><th>MD2</th><th>MD3</th><th class="num">Avg</th></tr></thead>
@@ -9325,6 +9369,7 @@ function openSwap(playerId){
   document.getElementById('drawer-body').innerHTML = `
     <h3>Swap: ${p.name} <span class="pill pos-${p.pos}">${p.pos}</span></h3>
     <div class="dim" style="margin-bottom:10px">${TEAMS[p.team].name} · $${Number(p.price ?? 0).toFixed(1)}m · MRI ${Number(p.mri ?? 0).toFixed(2)} · Bank $${Number(bank ?? 0).toFixed(1)}m</div>
+    ${STATE.captainId !== p.id ? `<button class="primary" style="margin-bottom:10px" onclick="setCaptain(${p.id})">Ⓒ Make ${p.name.split(' ').pop()} captain</button>` : `<div class="dim" style="margin-bottom:10px">Ⓒ Current captain</div>`}
     ${isStarter && benchSwapRows.length ? `
       <h3 style="margin-top:14px">Swap with bench (XI rotation, no transfer cost)</h3>
       <div class="dim" style="font-size:11px;margin-bottom:6px">Δ per matchday = bench player's xPts − ${p.name}'s xPts at that MD.</div>
@@ -10360,6 +10405,21 @@ function loadDefaultMyTeam(){
 // ---------- "MY TEAM" BASELINE (save / plan / reset) ----------
 // The baseline is your committed real squad. Planning tweaks (transfers, MD stepping) live on a
 // working copy in STATE; Reset reverts to the baseline, Save overwrites it with the current squad.
+// User-set armband. Demotes the outgoing captain to vice (if he isn't already), autosaves the
+// working copy, and re-renders. Commit to the baseline is still the explicit "Save my team" tap.
+function setCaptain(pid){
+  if(!STATE.squad.includes(pid)) return;
+  const prev = STATE.captainId;
+  STATE.captainId = pid;
+  if(STATE.viceId === pid) STATE.viceId = (prev && prev !== pid) ? prev : null;
+  else if(prev && prev !== pid) STATE.viceId = prev;
+  STATE.squadSource = 'user';
+  if(typeof autoSaveCurrent === 'function') autoSaveCurrent();
+  const dr = document.getElementById('drawer'); if(dr) dr.classList.remove('open');
+  refresh(); renderAll();
+}
+window.setCaptain = setCaptain;
+
 function _readMyTeam(){ try { return JSON.parse(localStorage.getItem('wctd_myteam') || 'null'); } catch { return null; } }
 function saveMyTeam(){
   if(STATE.squad.length < 1){ alert('Load a squad first.'); return; }

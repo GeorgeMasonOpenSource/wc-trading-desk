@@ -22,7 +22,10 @@ const APPLY = process.argv.includes('--apply');
 // Window spans the whole tournament (group + knockouts). Completed games still appear as events
 // (with scores, usually no live odds), so each team's Nth event reliably maps to its Nth match:
 // games 1-3 = group MD1-3, 4 = R32, 5 = R16, 6 = QF, 7 = SF, 8 = Final.
-const SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260720';
+// limit=400: ESPN's default scoreboard page is 100 events — the tournament has 104 (72 group + 16
+// R32 + 8 R16 + 4 QF + 2 SF + 3rd place + Final), so without the param the SF/3rd/Final events are
+// silently truncated from every refresh (kickoffs, odds, and bracket for the last rounds all missing).
+const SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260720&limit=400';
 const EVENT_ODDS = id => `https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${id}/competitions/${id}/odds?limit=20`;
 const ROUND_OF = n => n <= 3 ? String(n) : ({4:'R32',5:'R16',6:'QF',7:'SF',8:'F'}[n] || null);
 const IS_KO = md => md != null && !/^[1-3]$/.test(md);
@@ -436,6 +439,39 @@ async function probeStats(){
   } catch(e){ console.log('[probe-stats] summary ->', e.message); }
 }
 
+// --probe-lineage: settle the LAST unknown for the projected bracket — which real R32 matchup is
+// ESPN's "Round of 32 N" slot N. The R16 event names give the forward tree in slot numbers; this
+// dumps (a) every KO event incl. SF/F (limit=400 now), (b) one resolved R32 event's core-API JSON
+// and site-summary header, hunting for a structured slot/match-number field so we never guess.
+async function probeLineage(){
+  const sb = await getJSON(SCOREBOARD);
+  const events = (sb.events||[]).slice().sort((x,y)=>Date.parse(x.date||0)-Date.parse(y.date||0));
+  console.log('[probe-lineage] total events:', events.length);
+  const ko = events.filter(e => (e.season?.slug||'') !== 'group-stage' &&
+    !/^(1st|2nd|3rd) /.test(e.season?.slug||'') && Date.parse(e.date) >= Date.parse('2026-06-28'));
+  for(const ev of ko){
+    const c = ev.competitions?.[0]||{};
+    const notes = (c.notes||[]).map(n=>n.headline||n.text).join(';');
+    console.log(`[probe-lineage] ${ev.date?.slice(0,10)} id=${ev.id} slug=${ev.season?.slug} | "${ev.name}" | notes="${notes}" | altGameNote="${c.altGameNote||''}"`);
+  }
+  // Deep-dump one RESOLVED R32 event + one UNRESOLVED R16 event from the core API.
+  const r32 = ko.find(e => /R32|Round of 32/i.test(e.season?.slug||'') || (Date.parse(e.date) < Date.parse('2026-07-04T06:00Z')));
+  const r16 = ko.find(e => /Round of 32 \d+ Winner/.test(e.name||''));
+  for(const [tag, ev] of [['R32-resolved', r32], ['R16-unresolved', r16]]){
+    if(!ev) { console.log(`[probe-lineage] no ${tag} event found`); continue; }
+    try {
+      const core = await getJSON(`https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${ev.id}?lang=en`);
+      console.log(`[probe-lineage] ${tag} ${ev.id} core keys:`, Object.keys(core).join(','));
+      console.log(`[probe-lineage] ${tag} core dump:`, JSON.stringify(core).slice(0, 2200));
+    } catch(e){ console.log(`[probe-lineage] ${tag} core -> ${e.message}`); }
+    try {
+      const s = await getJSON(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${ev.id}`);
+      const hdr = s.header?.competitions?.[0] || {};
+      console.log(`[probe-lineage] ${tag} summary header:`, JSON.stringify({notes: hdr.notes, series: hdr.series, note: s.gameInfo?.note, gameNote: hdr.gameNote, description: hdr.description}).slice(0,800));
+    } catch(e){ console.log(`[probe-lineage] ${tag} summary -> ${e.message}`); }
+  }
+}
+
 // --probe-minutes: fetch the live FIFA fantasy feed (same source the app uses client-side) and dump
 // the actual per-round points / status / ownership for a few marquee players. roundPoints is the
 // real minutes proxy (≥2 = started 60+, ≥1 = featured, absent/0 = DNP). Confirms whether the live
@@ -463,5 +499,6 @@ const PROBE_PLAYERS = process.argv.includes('--probe-players');
 const PROBE_BRACKET = process.argv.includes('--probe-bracket');
 const PROBE_STATS = process.argv.includes('--probe-stats');
 const PROBE_MINUTES = process.argv.includes('--probe-minutes');
-(PROBE_MINUTES ? probeMinutes() : PROBE_BRACKET ? probeBracket() : PROBE_STATS ? probeStats() : PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
+const PROBE_LINEAGE = process.argv.includes('--probe-lineage');
+(PROBE_LINEAGE ? probeLineage() : PROBE_MINUTES ? probeMinutes() : PROBE_BRACKET ? probeBracket() : PROBE_STATS ? probeStats() : PROBE_PLAYERS ? probePlayers() : PROBE ? probe() : main())
   .catch(err => { console.error('[refresh-odds] FAILED:', err.message); process.exit(1); });
