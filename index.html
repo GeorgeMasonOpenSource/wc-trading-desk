@@ -3119,7 +3119,10 @@ function getOppFor(playerTeam, md){
     if(!f) return null;
     return {opp:f.opp, home:f.home, def:TEAMS[f.opp].def, att:TEAMS[f.opp].att};
   }
-  // knockouts: real bracket matchup if the round has resolved (from KNOCKOUTS), else the PROJECTED
+  // knockouts: an ELIMINATED team has no fixture, full stop — returning null here zeroes every
+  // downstream surface (projections, optimizer, transfers, captaincy, fixture pills) at the source.
+  if(isEliminated(playerTeam)) return null;
+  // Otherwise: real bracket matchup if the round has resolved (from KNOCKOUTS), else the PROJECTED
   // opponent from the bracket tree (favourites advance), else a coarse average-opponent profile.
   // Venues are neutral, so no home edge except for host nations.
   const ko = KNOCKOUTS[playerTeam] && KNOCKOUTS[playerTeam][md];
@@ -3134,6 +3137,36 @@ function getOppFor(playerTeam, md){
   }
   const o = KO_AVG_OPP[md];
   return {opp:null, home:0, def:o.def, att:o.att};
+}
+
+// ---------- ELIMINATION ----------
+// A knocked-out team must project ZERO for every remaining round — otherwise eliminated players
+// keep appearing in the optimizer, transfer suggestions and captain lists (they did: GER lost the
+// R32 on 2026-06-29 and Wirtz still projected 4.5 for R16). Derived purely from observed data:
+// KNOCKOUTS membership (only the 32 R32 qualifiers appear) + decided ties in BRACKET_TREE +
+// "opponent advanced, we didn't" as a stopgap for ties the tree hasn't bound yet.
+function isEliminated(team){
+  if(typeof KNOCKOUTS === 'undefined' || !Object.keys(KNOCKOUTS).length) return false;  // group stage: bracket not drawn
+  if(!TEAMS[team]) return false;
+  if(!KNOCKOUTS[team]) return true;                       // never reached the R32 bracket
+  const BT = (typeof BRACKET_TREE !== 'undefined') ? BRACKET_TREE : {};
+  for(const s in (BT.slots||{})){
+    const sl = BT.slots[s];
+    if(sl && sl.w && sl.w !== team && (sl.t||[]).includes(team)) return true;   // lost a decided R32 tie
+  }
+  for(const lvl of ['r16','qf','sf','f']){
+    for(const e of (BT[lvl]||[])){
+      if(e.w && e.w !== team && (e.away===team || e.home===team)) return true;  // lost a decided later tie
+    }
+  }
+  // Stopgap before the tree binds: our round-N opponent already has a round-N+1 fixture, we don't.
+  const seq = ['R32','R16','QF','SF'];
+  for(let i=0;i<seq.length;i++){
+    const tie = KNOCKOUTS[team][seq[i]]; if(!tie) break;
+    const nxt = seq[i+1] || 'F';
+    if(!KNOCKOUTS[team][nxt] && KNOCKOUTS[tie.opp] && KNOCKOUTS[tie.opp][nxt]) return true;
+  }
+  return false;
 }
 
 // ---------- PROJECTED FORWARD BRACKET ----------
@@ -4383,9 +4416,15 @@ function _findBestSingleTransfer(squadIds, mdsRemaining, bank, capPerCountry){
       .filter(c => c.price <= newBank + 0.001 && (ccMinusOut[c.team]||0) < capPerCountry)
       .map(c => ({c, raw: mdsRemaining.reduce((a,m)=>a + (projectXPts(c, m)?.xpts || 0), 0)}))
       .sort((a,b)=>b.raw - a.raw).slice(0, 8);
+    // Freeing a KNOCKED-OUT player's slot carries option value beyond this round's XI score (he is
+    // dead weight for every remaining round and can't even bench-cover), so eliminated-outs get a
+    // small bonus. Without it, swapping an eliminated bench player ties with swapping a weak ALIVE
+    // starter (identical resulting XI) and the greedy kept whichever came first in squad order —
+    // e.g. suggesting Bellingham→Casemiro while eliminated Wirtz stayed in the squad.
+    const outDead = isEliminated(out.team) ? 0.2 : 0;
     for(const {c} of shortlist){
       const sq = squadIds.map(x => x===outId ? c.id : x);
-      const xiGain = mdsRemaining.reduce((a,m)=>a + _gwScore(sq, m), 0) - baseXi;
+      const xiGain = mdsRemaining.reduce((a,m)=>a + _gwScore(sq, m), 0) - baseXi + outDead;
       if(!best || xiGain > best.delta){
         best = {outId, inId:c.id, delta:xiGain, netCost: c.price - out.price, newBank: newBank - c.price};
       }
@@ -4917,9 +4956,11 @@ function computeRecommendation(){
   STATE._recViceId  = ranked[1]?.id ?? null;
   STATE._recXIIds   = xi.map(p=>p.id);
   STATE._recCapXpts = ranked[0]?.xptsMD ?? 0;
-  const userCapValid = STATE.squadSource === 'user' && STATE.captainId && STATE.squad.includes(STATE.captainId);
+  // An eliminated player can't wear the armband — treat that as "no valid user choice" too.
+  const _capTeam = PLAYER_BY_ID[STATE.captainId]?.team;
+  const userCapValid = STATE.squadSource === 'user' && STATE.captainId && STATE.squad.includes(STATE.captainId) && !(_capTeam && isEliminated(_capTeam));
   if(!userCapValid){ STATE.captainId = STATE._recCapId; STATE.viceId = STATE._recViceId; }
-  else if(!STATE.viceId || !STATE.squad.includes(STATE.viceId) || STATE.viceId === STATE.captainId){
+  else if(!STATE.viceId || !STATE.squad.includes(STATE.viceId) || STATE.viceId === STATE.captainId || isEliminated(PLAYER_BY_ID[STATE.viceId]?.team)){
     STATE.viceId = ranked.find(p=>p.id !== STATE.captainId)?.id ?? null;
   }
 }
@@ -5503,11 +5544,12 @@ function renderPitch(){
   const xiByMD = [...xi].sort((a,b)=>b.xptsMD-a.xptsMD);
   // Preserve the USER's armband (same rule as computeRecommendation) — the pitch used to force
   // captain = top projected XI player on every render, erasing the saved choice.
-  const _userCapValid = STATE.squadSource === 'user' && STATE.captainId && squad.some(p=>p && p.id===STATE.captainId);
+  const _userCapValid = STATE.squadSource === 'user' && STATE.captainId && squad.some(p=>p && p.id===STATE.captainId)
+    && !isEliminated(PLAYER_BY_ID[STATE.captainId]?.team);
   if(!_userCapValid){
     STATE.captainId = xiByMD[0]?.id;
     STATE.viceId = xiByMD[1]?.id;
-  } else if(!STATE.viceId || !squad.some(p=>p && p.id===STATE.viceId) || STATE.viceId === STATE.captainId){
+  } else if(!STATE.viceId || !squad.some(p=>p && p.id===STATE.viceId) || STATE.viceId === STATE.captainId || isEliminated(PLAYER_BY_ID[STATE.viceId]?.team)){
     STATE.viceId = xiByMD.find(p=>p.id !== STATE.captainId)?.id;
   }
   // invalidate optimizer cache on squad changes
@@ -5549,9 +5591,11 @@ function renderPitch(){
     const srcDots = score === 3 ? '●●●' : score === 2 ? '●●' : score === 1 ? '●' : '○';
     const srcLabel = `Data confidence: team-xG ${dim1?'✓ bookie':'✗ Elo'} · MRI ${dim2?'✓ observed':'✗ heuristic'} · player stats ${dim3?'✓ curated':'✗ proxy'}`;
     const srcColor = score === 3 ? 'var(--good)' : score === 2 ? 'var(--ink2)' : 'var(--warn)';
-    return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer" title="Tap to swap ${shortName(p.name)}">
+    const out = isEliminated(p.team);
+    return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer${out?';opacity:0.55':''}" title="${out?TEAMS[p.team].name+' are OUT of the tournament — transfer '+shortName(p.name)+' out':'Tap to swap '+shortName(p.name)}">
       <button class="card-x" title="Remove ${shortName(p.name)} → pick a replacement" onclick="event.stopPropagation();toggleSquad(${p.id})">✕</button>
       <span class="card-swap" title="Swap">⇄</span>
+      ${out?'<span style="position:absolute;top:4px;left:4px;background:var(--bad);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;z-index:2">OUT</span>':''}
       <div class="shirt" style="pointer-events:none">${shirtSvg(p.team, isCap, isVC)}</div>
       <div class="n pos-${p.pos}" style="pointer-events:none">${shortName(p.name)}</div>
       <div class="c" style="pointer-events:none"><span class="badge-group" style="background:${c.primary};color:${c.alt};border-color:${c.primary}">${p.team}</span> <span class="dim mono" style="font-size:10px">$${p.price.toFixed(1)}</span> <span title="${srcLabel}" style="color:${srcColor};font-size:9px;letter-spacing:-1px">${srcDots}</span></div>
@@ -5649,8 +5693,9 @@ function renderTeamPool(){
   el.innerHTML = rows.map(p=>{
     const owned = STATE.squad.includes(p.id);
     const oppTxt = p.opp ? `vs ${p.opp}` : MD_LABEL(md);
-    return `<div class="pool-row ${owned?'owned':''}" onclick="openPlayer(${p.id})">
-      <div class="pr-main"><div class="pr-name">${p.name}</div><div class="pr-sub"><span class="pos-${p.pos}">${p.pos}</span> · ${p.team} ${oppTxt} · $${p.price.toFixed(1)}m · ${(p.own*100).toFixed(0)}% sel</div></div>
+    const out = isEliminated(p.team);
+    return `<div class="pool-row ${owned?'owned':''}" onclick="openPlayer(${p.id})"${out?' style="opacity:0.55"':''}>
+      <div class="pr-main"><div class="pr-name">${p.name}${out?' <span style="background:var(--bad);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle">OUT</span>':''}</div><div class="pr-sub"><span class="pos-${p.pos}">${p.pos}</span> · ${p.team} ${oppTxt} · $${p.price.toFixed(1)}m · ${(p.own*100).toFixed(0)}% sel</div></div>
       <div class="pr-pred good" title="Predicted points, ${MD_LABEL(md)}">${p.xptsMD.toFixed(1)}</div>
       ${owned ? '<span class="pr-add dim" title="In your team">✓</span>' : `<button class="pr-add" title="Add to team" onclick="event.stopPropagation();addToSquad(${p.id});refresh()">+</button>`}
     </div>`;
@@ -9421,6 +9466,7 @@ function openSwap(playerId){
   const alts = PLAYERS.filter(q=>{
     if(STATE.squad.includes(q.id)) return false;
     if(q.pos !== p.pos) return false;
+    if(isEliminated(q.team)) return false;             // never suggest transferring IN a knocked-out player
     if(q.price > maxPrice + 0.01) return false;        // budget filter
     if((cc[q.team]||0) >= STATE.maxPerCountry) return false;  // country cap filter
     return true;
@@ -9944,13 +9990,22 @@ const TEST_SUITE = [
       return (r && r.opp === 'NOR') ? {pass:true} : {pass:false, msg:`got ${r && r.opp}`};
     }
   },
-  { name: 'Projected bracket: unbound path falls back to KO_AVG_OPP, favourites-advance picks Elo max',
+  { name: 'Projected bracket: favourites-advance picks the Elo max of an undecided tie',
     fn: () => {
-      const elim = getOppFor('SCO','R16');                    // eliminated in groups — never in the tree
-      const fb = elim && elim.opp === null && elim.def === KO_AVG_OPP.R16.def;
       const fav = _btEntryWinner('r16', {f:[null,null], away:'FRA', home:'PAR', w:null});
       const favOK = fav === (TEAMS.FRA.elo > TEAMS.PAR.elo ? 'FRA' : 'PAR');
-      return (fb && favOK) ? {pass:true} : {pass:false, msg:`fallback ${fb}, favoured ${fav}`};
+      return favOK ? {pass:true} : {pass:false, msg:`favoured ${fav}`};
+    }
+  },
+  { name: 'Elimination: knocked-out teams project zero for remaining rounds, tournament has survivors',
+    fn: () => {
+      // GER lost the R32 (slot 2, decided) and SCO never reached the bracket — both permanent facts.
+      const gerOut = isEliminated('GER'), scoOut = isEliminated('SCO');
+      const wirtz = PLAYERS.find(p=>p.team==='GER' && p.pos==='MID');
+      const zeroed = wirtz ? projectXPts(wirtz,'R16') === null : false;
+      const survivors = Object.keys(TEAMS).filter(t=>!isEliminated(t)).length >= 1;
+      return (gerOut && scoOut && zeroed && survivors) ? {pass:true}
+        : {pass:false, msg:`GER ${gerOut} SCO ${scoOut} zeroed ${zeroed} survivors ${survivors}`};
     }
   },
   { name: 'Form factor: identity w/o data, marks down non-producers, bounded',
@@ -10887,7 +10942,7 @@ function inferMRI(p, squadPlayers){
   }
   // Availability: only act on recognised unavailable/doubtful statuses (don't guess on unknowns).
   const st = (p.status || '').toLowerCase();
-  if(/injur|suspend|unavail|\bout\b|ban/.test(st)) base = Math.min(base, 0.05);
+  if(/injur|suspend|unavail|\bout\b|ban|eliminat/.test(st)) base = Math.min(base, 0.05);
   else if(/doubt|question|gtd/.test(st)) base = Math.min(base, 0.45);
 
   return Math.round(base*100)/100;
