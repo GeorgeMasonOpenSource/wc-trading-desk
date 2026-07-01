@@ -177,6 +177,71 @@ async function probe(){
   }
 }
 
+// ---------- PROJECTED BRACKET (BRACKET_TREE) ----------
+// ESPN encodes the knockout tree in placeholder competitor names ("Round of 32 12 Winner at
+// Round of 32 11 Winner"). Those names carry the lineage ONLY while unresolved — once a feeder
+// game finishes, ESPN swaps the placeholder for the real team and the slot number vanishes.
+// So the tree is built by OBSERVED MERGE: each run parses whatever placeholders remain, binds
+// slot→matchup whenever a side has resolved to a real team, and merges with the tree already
+// committed in index.html (the page itself is the persistence). Bindings only ever grow; nothing
+// is guessed. The app's projectedOpponent() walks exactly as far as bindings allow.
+const KO_LEVELS = [
+  {key:'r16', slug:'round-of-16',   feeder:/^Round of 32 (\d+) Winner$/,  prev:'slot'},
+  {key:'qf',  slug:'quarterfinals', feeder:/^Round of 16 (\d+) Winner$/,  prev:'r16'},
+  {key:'sf',  slug:'semifinals',    feeder:/^Quarterfinal (\d+) Winner$/, prev:'qf'},
+  {key:'f',   slug:'final',         feeder:/^Semifinal (\d+) Winner$/,    prev:'sf'},
+];
+function parsePriorTree(html){
+  const m = html.match(/const BRACKET_TREE = (\{[\s\S]*?\}); \/\/ END BRACKET_TREE/);
+  if(!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+function buildBracketTree(events, prior, KO){
+  const T = { updated: new Date().toISOString().slice(0,10),
+    slots: (prior && prior.slots) || {}, r16: [], qf: [], sf: [], f: [],
+    r16ord: (prior && prior.r16ord) || {}, qford: (prior && prior.qford) || {}, sford: (prior && prior.sford) || {} };
+  const priorById = {};
+  for(const k of ['r16','qf','sf','f']) ((prior && prior[k]) || []).forEach(e => priorById[e.id] = e);
+  for(const spec of KO_LEVELS){
+    const evs = events.filter(e => (e.season?.slug||'') === spec.slug)
+      .sort((x,y)=>Date.parse(x.date||0)-Date.parse(y.date||0));
+    for(const ev of evs){
+      const comp = ev.competitions?.[0] || {};
+      const cs = comp.competitors || [];
+      const p = priorById[String(ev.id)] || {};
+      const ent = { id:String(ev.id), k:(ev.date||'').slice(0,10),
+        f:(p.f || [null,null]).slice(), away:p.away||null, home:p.home||null, w:p.w||null };
+      for(const [i, side] of [[0,'away'],[1,'home']]){
+        const c = cs.find(x=>x.homeAway===side);
+        const dn = c?.team?.displayName || '', ab = c?.team?.abbreviation || '';
+        const m = dn.match(spec.feeder);
+        if(m){ ent.f[i] = +m[1]; continue; }          // still a placeholder — records the lineage
+        if(!isRealTeam(ab)) continue;
+        ent[side] = ab;
+        const fd = ent.f[i];                          // feeder remembered from a prior run
+        if(fd == null) continue;
+        if(spec.prev === 'slot'){
+          // R32 slot fd has resolved: `ab` won it. Its matchup comes from the KO map.
+          const opp = KO?.[ab]?.R32?.opp || ((T.slots[fd]||{}).t||[]).find(t=>t!==ab) || null;
+          T.slots[fd] = { t: opp ? [ab, opp] : [ab], w: ab };
+        } else {
+          // bind prev-level ordinal fd -> the prev-level event that produced `ab`
+          const prevList = T[spec.prev].length ? T[spec.prev] : ((prior && prior[spec.prev]) || []);
+          const pe = prevList.find(e=>e.away===ab || e.home===ab || e.w===ab);
+          if(pe) T[spec.prev + 'ord'][fd] = pe.id;
+        }
+      }
+      if(ent.away && ent.home && comp.status?.type?.state === 'post'){
+        const wc = cs.find(x=>x.winner || x.advance);
+        const wab = wc?.team?.abbreviation;
+        if(isRealTeam(wab)) ent.w = wab;
+      }
+      T[spec.key].push(ent);
+    }
+  }
+  return T;
+}
+
 async function main(){
   const sb = await getJSON(SCOREBOARD);
   const events = sb.events || [];
@@ -327,6 +392,13 @@ async function main(){
   // (and worth committing so the app advances past MD3) even when bookies haven't priced the round.
   const koBlock = nKO > 0 ? `const KNOCKOUTS = ${ser(KO)}` : null;
 
+  // Forward bracket: merge observed lineage into the committed tree (see buildBracketTree).
+  const htmlForTree = fs.readFileSync(INDEX, 'utf8');
+  const tree = buildBracketTree(events, parsePriorTree(htmlForTree), KO);
+  const btBlock = `const BRACKET_TREE = ${JSON.stringify(tree)}; // END BRACKET_TREE`;
+  const nSlots = Object.keys(tree.slots).length;
+  console.log(`[refresh-odds] bracket: ${nSlots}/16 R32 slots bound, r16ord ${Object.keys(tree.r16ord).length}/8, qford ${Object.keys(tree.qford).length}/4`);
+
   // SANITY GATE for the ODDS blocks only — never overwrite a good snapshot with thin data. Fewer
   // teams play deep into the knockouts (QF=8, SF=4, F=2), so the floor relaxes once KO games exist.
   const oddsFloor = nKO > 0 ? 2 : 16;
@@ -345,12 +417,14 @@ async function main(){
   if(xgBlock) new Function(xgBlock);
   if(mktBlock) new Function(mktBlock);
   if(koBlock) new Function(koBlock);
+  if(btBlock) new Function(btBlock);
 
   if(!APPLY){
     console.log(`// generated ${today} — dry run (use --apply to patch index.html)\n`);
     if(xgBlock) console.log(xgBlock + '\n');
     if(mktBlock) console.log(mktBlock + '\n');
     if(koBlock) console.log(koBlock);
+    if(btBlock) console.log(btBlock);
     return;
   }
 
@@ -360,6 +434,7 @@ async function main(){
   if(mktBlock) swaps.push([/const BOOKIE_MARKETS = \{[\s\S]*?\n\};/, mktBlock]);
   else if(!oddsThin) console.warn('[refresh-odds] no prop markets parsed — keeping existing BOOKIE_MARKETS snapshot');
   if(koBlock)  swaps.push([/const KNOCKOUTS = \{[\s\S]*?\n\};/, koBlock]);
+  if(btBlock)  swaps.push([/const BRACKET_TREE = \{[\s\S]*?\}; \/\/ END BRACKET_TREE/, btBlock]);
   for(const [re, repl] of swaps){
     if(!re.test(html)) throw new Error(`marker not found: ${re}`);
     html = html.replace(re, repl);

@@ -714,6 +714,7 @@
         <tr><td><b>team Elo / att / def</b></td><td>Hand-calibrated from eloratings.net May 2026 snapshot — only used in KO rounds + fallback</td><td><span class="warn">Heuristic (fallback only)</span></td></tr>
         <tr><td><b>Player goal-share (gs)</b></td><td>Computed: <code>0.12-0.37 by position × price tier within squad</code></td><td><span class="bad">Modeled (price-tier proxy)</span></td></tr>
         <tr><td><b>Player assist-share (as)</b></td><td>Same: price-tier proxy by position</td><td><span class="bad">Modeled</span></td></tr>
+        <tr><td><b>Knockout bracket & future opponents</b></td><td>Round matchups + kickoffs ingested from ESPN as each round resolves (KNOCKOUTS). Future rounds use the <b>projected bracket</b>: ESPN's placeholder lineage ("Round of 32 11 Winner…") is parsed and merged every refresh into BRACKET_TREE, and projections assume the <b>Elo favourite advances</b> each unresolved tie — marked "~OPP" in fixture pills. Paths the feed hasn't revealed yet fall back to an average-opponent profile (no guessing).</td><td><span class="good">Observed + clearly-labelled projection</span></td></tr>
         <tr><td><b>Player tk90 / cc90 / sot90</b></td><td>Hand-curated per-90s for ~80 marquee players. Everyone else: chances-created and shots-on-target fall back to a <b>profile prior scaled to that player's own modelled involvement</b> (assist share → chances, goal share → SOT, calibrated against the curated set); tackles have no reliable proxy and stay curated-only (0 otherwise). <b style="color:var(--bad)">NOT</b> from bookies — player props are not in ESPN's free feed; a paid API (api-football / Opta) is out of scope.</td><td><span class="warn">Curated + profile prior</span></td></tr>
         <tr><td><b>Pen-drawn rate</b></td><td>Hand-curated for ~25 known pen-drawers; 0.01-0.06 default</td><td><span class="warn">Partial-curated</span></td></tr>
         <tr><td><b>PK / FK taker share</b></td><td>Hand-curated for ~40 known set-piece takers; 0 for rest</td><td><span class="warn">Partial-curated</span></td></tr>
@@ -1564,8 +1565,10 @@ function buildFixtures() {
 }
 let FIXTURES = buildFixtures();
 
-// Projected knockout opponents (by Elo-weighted seeding heuristic — coarse)
-// For MD R32+ we use an "average top-N opponent" rather than committing to a bracket.
+// LAST-RESORT average knockout opponent profile. Used only when a round's matchup is neither
+// resolved (KNOCKOUTS) nor walkable via the observed BRACKET_TREE (projectedOpponent) — i.e. the
+// team's path through the bracket hasn't bound yet. Bindings grow every refresh, so this fallback
+// covers less of the bracket each day.
 const KO_AVG_OPP = {
   R32:{def:78,att:79},  // typical group winner-ish opponent
   R16:{def:81,att:82},
@@ -1612,6 +1615,14 @@ const KNOCKOUTS = {
   SWE:{R32:{opp:"FRA",home:false,kickoff:"2026-06-30T21:00Z"}},
   USA:{R32:{opp:"BIH",home:true,kickoff:"2026-07-02T00:00Z"}},
 };
+
+// PROJECTED FORWARD BRACKET — AUTO-MERGED by scripts/refresh-odds.mjs from ESPN's placeholder
+// names ("Round of 32 12 Winner at Round of 32 11 Winner" etc.). `slots` binds R32 slot number →
+// matchup+winner as observed; `f` on each entry = [awayFeeder, homeFeeder]; `r16ord/qford/sford`
+// bind round-local ordinals → event ids as later rounds' placeholders resolve. Everything here is
+// OBSERVED from the feed (probes 2026-06-28 + 2026-07-01) — bindings grow each refresh, never guessed.
+// projectedOpponent() walks this tree favourites-advance; unbound paths fall back to KO_AVG_OPP.
+const BRACKET_TREE = {"updated":"2026-07-01","slots":{"1":{"t":["CAN","RSA"],"w":"CAN"},"2":{"t":["PAR","GER"],"w":"PAR"},"3":{"t":["MAR","NED"],"w":"MAR"},"4":{"t":["BRA","JPN"],"w":"BRA"},"5":{"t":["FRA","SWE"],"w":"FRA"},"6":{"t":["NOR","CIV"],"w":"NOR"},"7":{"t":["MEX","ECU"],"w":"MEX"},"8":{"t":["ENG","COD"],"w":"ENG"}},"r16":[{"id":"760502","k":"2026-07-04","f":[3,1],"away":"MAR","home":"CAN","w":null},{"id":"760503","k":"2026-07-04","f":[5,2],"away":"FRA","home":"PAR","w":null},{"id":"760504","k":"2026-07-05","f":[6,4],"away":"NOR","home":"BRA","w":null},{"id":"760505","k":"2026-07-06","f":[8,7],"away":"ENG","home":"MEX","w":null},{"id":"760506","k":"2026-07-06","f":[12,11],"away":null,"home":null,"w":null},{"id":"760507","k":"2026-07-07","f":[10,9],"away":null,"home":null,"w":null},{"id":"760509","k":"2026-07-07","f":[16,14],"away":null,"home":null,"w":null},{"id":"760508","k":"2026-07-07","f":[15,13],"away":null,"home":null,"w":null}],"qf":[{"id":"760510","k":"2026-07-09","f":[2,1],"away":null,"home":null,"w":null},{"id":"760511","k":"2026-07-10","f":[6,5],"away":null,"home":null,"w":null},{"id":"760512","k":"2026-07-11","f":[4,3],"away":null,"home":null,"w":null},{"id":"760513","k":"2026-07-12","f":[8,7],"away":null,"home":null,"w":null}],"sf":[{"id":"760514","k":"2026-07-14","f":[2,1],"away":null,"home":null,"w":null},{"id":"760515","k":"2026-07-15","f":[4,3],"away":null,"home":null,"w":null}],"f":[{"id":"760517","k":"2026-07-19","f":[2,1],"away":null,"home":null,"w":null}],"r16ord":{},"qford":{},"sford":{}}; // END BRACKET_TREE
 
 // ---------- PLAYERS ----------
 // AUTO-PULLED from play.fifa.com/json/fantasy/players.json — May 30 2026.
@@ -3108,15 +3119,94 @@ function getOppFor(playerTeam, md){
     if(!f) return null;
     return {opp:f.opp, home:f.home, def:TEAMS[f.opp].def, att:TEAMS[f.opp].att};
   }
-  // knockouts: real bracket matchup if the round has resolved (from KNOCKOUTS), else a coarse
-  // average-opponent profile. Venues are neutral, so no home edge except for host nations.
+  // knockouts: real bracket matchup if the round has resolved (from KNOCKOUTS), else the PROJECTED
+  // opponent from the bracket tree (favourites advance), else a coarse average-opponent profile.
+  // Venues are neutral, so no home edge except for host nations.
   const ko = KNOCKOUTS[playerTeam] && KNOCKOUTS[playerTeam][md];
   if(ko && TEAMS[ko.opp]){
     const home = (TEAMS[playerTeam] && TEAMS[playerTeam].host) ? 0.15 : 0;
     return {opp:ko.opp, home, def:TEAMS[ko.opp].def, att:TEAMS[ko.opp].att};
   }
+  const pj = projectedOpponent(playerTeam, md);
+  if(pj && TEAMS[pj.opp]){
+    const home = (TEAMS[playerTeam] && TEAMS[playerTeam].host) ? 0.15 : 0;
+    return {opp:pj.opp, home, def:TEAMS[pj.opp].def, att:TEAMS[pj.opp].att, projected:pj.projected};
+  }
   const o = KO_AVG_OPP[md];
   return {opp:null, home:0, def:o.def, att:o.att};
+}
+
+// ---------- PROJECTED FORWARD BRACKET ----------
+// Walk BRACKET_TREE assuming the Elo FAVOURITE advances each unresolved tie. Deterministic and
+// clearly labelled (fixture pills show "~OPP"); the survival weighting in projectHorizon already
+// discounts "might not get there" risk, so this only sharpens WHO the opponent likely is. Walks
+// exactly as far as observed bindings allow and returns null beyond (caller falls back to KO_AVG_OPP).
+const _BT_PREV = {r16:'slot', qf:'r16', sf:'qf', f:'sf'};
+function _btFavoured(cands){
+  const v = (cands||[]).filter(t=>TEAMS[t]);
+  if(!v.length) return null;
+  return v.reduce((a,b)=>TEAMS[b].elo > TEAMS[a].elo ? b : a);
+}
+// most-likely team to emerge from R32 slot s (winner if played, else Elo favourite of the matchup)
+function _btSlotWinner(s){
+  const e = BRACKET_TREE.slots && BRACKET_TREE.slots[s];
+  return e ? (e.w || _btFavoured(e.t)) : null;
+}
+// most-likely team to emerge from a tree entry, recursing into feeders as needed
+function _btEntryWinner(level, ent){
+  if(!ent) return null;
+  if(ent.w) return ent.w;
+  const prev = _BT_PREV[level];
+  const sides = [];
+  for(let i=0;i<2;i++){
+    const direct = i===0 ? ent.away : ent.home;
+    if(direct){ sides.push(direct); continue; }
+    const fd = ent.f && ent.f[i]; if(fd == null) continue;
+    if(prev === 'slot'){ const c = _btSlotWinner(fd); if(c) sides.push(c); }
+    else {
+      const pid = (BRACKET_TREE[prev+'ord']||{})[fd]; if(!pid) continue;
+      const c = _btEntryWinner(prev, (BRACKET_TREE[prev]||[]).find(x=>x.id===pid));
+      if(c) sides.push(c);
+    }
+  }
+  return _btFavoured(sides);
+}
+// does side i of `ent` (directly or through its feeder subtree) contain `team`?
+function _btSideHas(level, ent, i, team){
+  if(!ent) return false;
+  if((i===0 ? ent.away : ent.home) === team) return true;
+  const prev = _BT_PREV[level];
+  const fd = ent.f && ent.f[i]; if(fd == null) return false;
+  if(prev === 'slot'){
+    const sl = BRACKET_TREE.slots && BRACKET_TREE.slots[fd];
+    return !!(sl && (sl.w === team || (sl.t||[]).includes(team)));
+  }
+  const pid = (BRACKET_TREE[prev+'ord']||{})[fd]; if(!pid) return false;
+  const pe = (BRACKET_TREE[prev]||[]).find(x=>x.id===pid);
+  return _btSideHas(prev, pe, 0, team) || _btSideHas(prev, pe, 1, team) || (pe && pe.w === team);
+}
+// Projected opponent for `team` at knockout round 'R16'|'QF'|'SF'|'F'.
+// {opp, projected:true} = favourites-advance projection; projected:false = matchup already known.
+function projectedOpponent(team, round){
+  const level = {R16:'r16', QF:'qf', SF:'sf', F:'f'}[round];
+  if(!level || typeof BRACKET_TREE === 'undefined') return null;
+  const list = BRACKET_TREE[level] || [];
+  const ent = list.find(e => e.w===team || _btSideHas(level, e, 0, team) || _btSideHas(level, e, 1, team));
+  if(!ent) return null;
+  const mySide = _btSideHas(level, ent, 0, team) || ent.away===team ? 0 : 1;
+  const oi = 1 - mySide;
+  const known = oi===0 ? ent.away : ent.home;
+  if(known && known !== team) return {opp:known, projected:false};
+  const prev = _BT_PREV[level];
+  const fd = ent.f && ent.f[oi]; if(fd == null) return null;
+  let cand = null;
+  if(prev === 'slot') cand = _btSlotWinner(fd);
+  else {
+    const pid = (BRACKET_TREE[prev+'ord']||{})[fd];
+    if(pid) cand = _btEntryWinner(prev, (BRACKET_TREE[prev]||[]).find(x=>x.id===pid));
+  }
+  if(!cand || cand === team) return null;
+  return {opp:cand, projected:true};
 }
 
 // === Per-player scoring-axis priors ===
@@ -4127,18 +4217,19 @@ function getNextFixtures(p, n=3){
   const cur = STATE.md;
   const curIdx = mds.indexOf(cur===parseInt(cur,10).toString() ? parseInt(cur,10) : cur);
   const upcoming = curIdx >= 0 ? mds.slice(curIdx) : mds;
-  // In the knockouts only the CURRENT round's opponent is known (single-elimination) — showing
-  // 3 future "gameweeks" with placeholder "—" opponents + projected points reads poorly. Cap to
-  // the current round once we're past the group stage; keep the 3-fixture strip during groups.
+  // Knockouts: the CURRENT round's opponent is real; beyond it we show bracket-PROJECTED opponents
+  // (favourites advance, marked with "~") as far as the tree walks — and stop at the first round
+  // with neither a real nor a projected opponent, so no "—" placeholder pills.
   const isKO = !/^[1-3]$/.test(String(cur));
-  const limit = isKO ? 1 : n;
+  const limit = isKO ? 2 : n;
   const out = [];
   for(const md of upcoming){
     const r = projectXPts(p, md);
     if(!r) continue;
     const opp = r.fx?.opp;
     const home = r.fx?.home > 0;
-    out.push({ md, opp, home, xpts: r.xpts });
+    if(isKO && !opp && out.length) break;   // unbound future round — stop rather than pad with "—"
+    out.push({ md, opp, home, xpts: r.xpts, projected: !!r.fx?.projected });
     if(out.length >= limit) break;
   }
   return out;
@@ -5439,7 +5530,10 @@ function renderPitch(){
       // Difficulty color: low xPts = harder fixture (red), high = easier (green)
       const diff = xptsVal === null ? '' : xptsVal > 5.5 ? 'good' : xptsVal > 3.5 ? '' : 'bad';
       const display = xptsVal === null ? '?' : xptsVal.toFixed(1);
-      return `<div class="fx-pill ${diff}" title="MD ${f.md} vs ${oppCode}${f.home?' (H)':''}">${oppCode}<span class="fx-xp">${display}</span></div>`;
+      // "~OPP" = bracket-projected opponent (favourites advance), not a confirmed matchup.
+      const oppLabel = f.projected ? '~'+oppCode : oppCode;
+      const title = f.projected ? `${MD_LABEL(f.md)} vs ${oppCode} (projected — assumes favourites advance)` : `MD ${f.md} vs ${oppCode}${f.home?' (H)':''}`;
+      return `<div class="fx-pill ${diff}" title="${title}">${oppLabel}<span class="fx-xp">${display}</span></div>`;
     }).join('');
     // Data-grounding badge — scores THREE dimensions and counts how many are data-backed:
     //   1. Team match data: bookmaker direct vs Elo fallback
@@ -9334,7 +9428,7 @@ function openSwap(playerId){
     .sort((a,b)=>b.xptsHor-a.xptsHor).slice(0,15);
 
   const fxBadges = (q)=>{
-    return getNextFixtures(q, 3).map(f=>`<span class="fx-pill ${f.xpts>5.5?'good':f.xpts<3.5?'bad':''}" style="font-size:10px">${f.opp||'—'}·${Number(f.xpts ?? 0).toFixed(1)}</span>`).join(' ');
+    return getNextFixtures(q, 3).map(f=>`<span class="fx-pill ${f.xpts>5.5?'good':f.xpts<3.5?'bad':''}" style="font-size:10px" title="${f.projected?'projected — assumes favourites advance':''}">${f.projected?'~':''}${f.opp||'—'}·${Number(f.xpts ?? 0).toFixed(1)}</span>`).join(' ');
   };
 
   // Compute per-MD deltas for bench swap (you swap who starts, not who is in squad)
@@ -9842,6 +9936,21 @@ const TEST_SUITE = [
       const out = Object.keys(TEAMS).find(c=>!koTeams.includes(c));
       if(out){ const s = computeSurvival(out); if(s.R32 !== 0) return {pass:false, msg:`${out} eliminated but survival.R32=${s.R32}`}; }
       return {pass:true};
+    }
+  },
+  { name: 'Projected bracket: known R16 matchup surfaces via tree (BRA → NOR)',
+    fn: () => {
+      const r = getOppFor('BRA','R16');
+      return (r && r.opp === 'NOR') ? {pass:true} : {pass:false, msg:`got ${r && r.opp}`};
+    }
+  },
+  { name: 'Projected bracket: unbound path falls back to KO_AVG_OPP, favourites-advance picks Elo max',
+    fn: () => {
+      const elim = getOppFor('SCO','R16');                    // eliminated in groups — never in the tree
+      const fb = elim && elim.opp === null && elim.def === KO_AVG_OPP.R16.def;
+      const fav = _btEntryWinner('r16', {f:[null,null], away:'FRA', home:'PAR', w:null});
+      const favOK = fav === (TEAMS.FRA.elo > TEAMS.PAR.elo ? 'FRA' : 'PAR');
+      return (fb && favOK) ? {pass:true} : {pass:false, msg:`fallback ${fb}, favoured ${fav}`};
     }
   },
   { name: 'Form factor: identity w/o data, marks down non-producers, bounded',
