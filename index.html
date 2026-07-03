@@ -459,10 +459,10 @@
       <label>Bank: $<input id="import-bank" type="number" value="0" step="0.1" style="width:60px">m</label>
       <label>Free transfers: <input id="import-free" type="number" value="2" min="0" max="3" style="width:50px"></label>
       <span class="dim" style="font-size:11px">Chips already used:</span>
-      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Wildcard"> Wildcard</label>
-      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="12th Man"> 12th Man</label>
-      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Maximum Captain"> Max Captaincy</label>
-      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Qualification Booster"> Qualification</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Wildcard" onchange="toggleChipUsed(this.value)"> Wildcard</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="12th Man" onchange="toggleChipUsed(this.value)"> 12th Man</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Maximum Captain" onchange="toggleChipUsed(this.value)"> Max Captaincy</label>
+      <label class="dim" style="font-size:11px"><input type="checkbox" class="import-chip-used" value="Qualification Booster" onchange="toggleChipUsed(this.value)"> Qualification</label>
       <button class="primary" id="import-squad-btn">Import squad</button>
     </div>
     <div id="import-squad-result" style="margin-top:8px"></div>
@@ -6253,7 +6253,10 @@ function evalWhatIf(){
 
 // ---------- CHIP PLANNER ----------
 function renderChips(){
-  const mds = ['1','2','3','R32','R16','QF','SF','F'];
+  // Only the rounds still to come — ranking chips across already-played rounds ("Wildcard best at
+  // MD2" shown mid-R16) was meaningless and made the panel read as broken.
+  const SEQ = ['1','2','3','R32','R16','QF','SF','F'];
+  const mds = SEQ.slice(Math.max(0, SEQ.indexOf(String(STATE.md))));
   // Optimal 12th Man per MD
   const t12 = document.getElementById('twelfth-table');
   if(t12 && STATE.squad.length >= 11){
@@ -6272,24 +6275,12 @@ function renderChips(){
     t12.innerHTML = '<tbody><tr><td class="dim">Fill your squad first.</td></tr></tbody>';
   }
   const chips = ['Wildcard','12th Man','Maximum Captain','Qualification Booster','Mystery Booster'];
-  // EV proxies
+  // LIVE EVs — same _chipEV the strategy plan uses (squad + survival aware), so the table and the
+  // plan can never disagree. Cells are null where a chip is illegal that round.
   const evGrid = {};
   mds.forEach(md=>{
     evGrid[md]={};
-    // Wildcard: BANNED at MD1 AND R32 (official). EV peaks at MD2 (post-MD1 info + before R32 unlimited).
-    if(md==='1' || md==='R32') evGrid[md]['Wildcard'] = null;
-    else evGrid[md]['Wildcard'] = md==='2' ? 14 : md==='3' ? 6 : md==='R16' ? 10 : 7;
-    // 12th Man: cannot be captained/sub'd. Pure xPts of best added player. Higher at deep rounds (best teams left, no rotation).
-    evGrid[md]['12th Man'] = md==='F' ? 13 : md==='SF' ? 11 : md==='QF' ? 9 : md==='R16' ? 8 : md==='R32' ? 7 : md==='3' ? 7 : 6;
-    // Maximum Captain: auto-best from STARTING XI. EV = E[max] - E[chosen captain]. Best when 3+ captains are close.
-    evGrid[md]['Maximum Captain'] = md==='R16' ? 7 : md==='R32' ? 6 : 5;
-    // Qualification Booster (R32+): +2 × N(starters whose team advances). Captain's +2 NOT doubled.
-    // R32: 11 starters × ~55% advance × 2 = ~12 (cap not doubled is small effect)
-    if(md==='1' || md==='2' || md==='3') evGrid[md]['Qualification Booster'] = null;
-    else evGrid[md]['Qualification Booster'] = md==='R32' ? 12 : md==='R16' ? 9 : md==='QF' ? 7 : md==='SF' ? 5 : 3;
-    // Mystery Booster: revealed at R32. Knockout-only. Model as flat 8 EV.
-    if(md==='1' || md==='2' || md==='3') evGrid[md]['Mystery Booster'] = null;
-    else evGrid[md]['Mystery Booster'] = 8;
+    chips.forEach(c=>{ const s = _chipEV(c, md, STATE.squad); evGrid[md][c] = s ? Math.round(s.ev*10)/10 : null; });
   });
 
   const tbl = document.getElementById('chip-table');
@@ -6310,68 +6301,29 @@ function renderChips(){
     }).join('')}</tbody>
   `;
 
-  // recommended order
-  const plan = chips.map(c=>{
-    const mdsList = mds.map(m=>({m, v:evGrid[m][c]})).filter(x=>x.v!=null);
-    mdsList.sort((a,b)=>b.v-a.v);
-    return {chip:c, when:mdsList[0].m, ev:mdsList[0].v};
-  });
-  plan.sort((a,b)=>b.ev-a.ev);
-  document.getElementById('chip-plan').innerHTML = plan.map((p,i)=>{
-    let pickDetails = '';
-    // For 12th Man: identify optimal player
-    if(p.chip === '12th Man'){
-      const tm = bestTwelfthMan(STATE.squad, p.when);
-      if(tm){
-        const r = projectXPts(tm.p, p.when);
-        const opp = r?.fx?.opp ? TEAMS[r.fx.opp].name : '';
-        pickDetails = `
-          <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
-            <b>Use as 12th Man:</b> <span class="good">${tm.p.name}</span> <span class="badge-group">${tm.p.team}</span> $${tm.p.price.toFixed(1)}m
-            ${opp ? `· vs ${opp}` : ''}
-            <br><span class="dim">Projects <b class="mono">${tm.raw.toFixed(1)}</b> raw xPts on ${MD_LABEL(p.when)}${p.when==='F'||p.when==='SF'||p.when==='QF'||p.when==='R16'||p.when==='R32' ? ` × ${(tm.survProb*100).toFixed(0)}% survival probability` : ''} = expected <b class="mono good">${tm.weighted.toFixed(1)}</b> xPts. No budget/country cap, no captaincy.</span>
-          </div>`;
-      }
-    }
-    // Maximum Captain
-    else if(p.chip === 'Maximum Captain'){
-      const mc = bestMaxCaptain(STATE.squad, p.when);
-      if(mc){
-        pickDetails = `
-          <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
-            <b>Auto-picks:</b> <span class="good">${mc.top.p.name}</span> <span class="badge-group">${mc.top.p.team}</span> · projected <b class="mono">${mc.top.x.toFixed(1)}</b> xPts on ${MD_LABEL(p.when)}
-            <br><span class="dim">Edge over 2nd-best (${mc.second?.p.name || '—'}, ${(mc.second?.x || 0).toFixed(1)}xP): <b class="mono ${mc.delta>1?'good':''}">+${mc.delta.toFixed(1)}</b>. Higher edge = more value from auto-cap.</span>
-          </div>`;
-      }
-    }
-    // Qualification Booster
-    else if(p.chip === 'Qualification Booster'){
-      const qb = qualificationBoosterBreakdown(STATE.squad, p.when);
-      if(qb){
-        const top3 = qb.rows.slice(0,3);
-        pickDetails = `
-          <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
-            <b>Per-starter expected bonus:</b> ${qb.totalEV.toFixed(1)} pts total. Top contributors:
-            <br>${top3.map(r => `<span class="badge-group">${r.p.team}</span> ${r.p.name}: ${(r.probAdvance*100).toFixed(0)}% advance × MRI ${r.playProb.toFixed(2)} = +${r.ev.toFixed(2)} EV`).join(' · ')}
-          </div>`;
-      }
-    }
-    // Wildcard
-    else if(p.chip === 'Wildcard'){
-      pickDetails = `
-        <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.5">
-          <b>Full squad rebuild:</b> click <i>Recompute plan</i> in Transfer Planner to see the optimal ${MD_LABEL(p.when)}-onwards squad. Best used right after MD1 lineups confirm or right before R16 knockout reset.
-        </div>`;
-    }
-    return `<div class="rec ${i<2?'':'warn'}">
-      <div>
-        <div class="title">${i+1}. ${p.chip}</div>
-        <div class="sub">Play at <b>${MD_LABEL(p.when)}</b>${p.chip==='Wildcard'?' · use before R32 (banned in R32)':p.chip==='Qualification Booster'?' · just before knockouts (best teams locked in)':''}</div>
-        ${pickDetails}
-      </div>
-      <div class="ev">+${p.ev.toFixed(1)}<span class="conf">EV vs no chip</span></div>
+  // Recommended order — the SAME coordinated plan as the Optimal Chip Strategy panel
+  // (computeOptimalChipPlan: live EVs, respects used-chip ticks, one booster per MD). This panel
+  // previously ranked each chip's best round independently, so several chips piled onto the same
+  // matchday (illegal — one booster per MD) and ticking a chip as used didn't remove it here.
+  const planEl = document.getElementById('chip-plan');
+  if(planEl){
+    const plan = computeOptimalChipPlan(STATE.squad);
+    const usedList = STATE.chipsUsed || [];
+    const ALL_CHIPS_CB = ['Wildcard','12th Man','Maximum Captain','Qualification Booster','Mystery Booster'];
+    const usedSet = new Set(usedList.map(c=>_norm(c)));
+    const selector = `<div style="margin-bottom:10px">
+      <div class="dim" style="font-size:11px;margin-bottom:5px">Chips you've already used (tick to remove — plan reflows instantly):</div>
+      <div class="row" style="gap:12px;flex-wrap:wrap;font-size:12px">${ALL_CHIPS_CB.map(c=>`<label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" ${usedSet.has(_norm(c))?'checked':''} onchange="toggleChipUsed('${c}')"> ${c}</label>`).join('')}</div>
     </div>`;
-  }).join('');
+    planEl.innerHTML = selector + (plan.length ? plan.map((c,i)=>`<div class="rec ${i<2?'':'warn'}">
+      <div>
+        <div class="title">${i+1}. ${c.chip} — play at <b>${MD_LABEL(c.primary)}</b>${c.alternate?` <span class="dim">(fallback: ${MD_LABEL(c.alternate)})</span>`:''}</div>
+        <div class="sub" style="line-height:1.5">${c.narrative}</div>
+        ${c.pickPlayer?`<div class="dim" style="font-size:11px;margin-top:3px">Pick: <b class="good">${c.pickPlayer.name}</b> <span class="badge-group">${c.pickPlayer.team}</span> $${c.pickPlayer.price.toFixed(1)}m</div>`:''}
+      </div>
+      <div class="ev">+${c.ev.toFixed(1)}<span class="conf">EV</span></div>
+    </div>`).join('') : '<div class="dim">All chips marked used — untick above if that\'s wrong.</div>');
+  }
 }
 
 // ---------- MODEL LAB ----------
@@ -10367,59 +10319,92 @@ toggleSquad = function(id){ _origToggleSquad(id); autoSaveCurrent(); };
 const _origSetMri = setMriOverride;
 setMriOverride = function(pid, value, label){ _origSetMri(pid, value, label); autoSaveCurrent(); };
 
-// ---------- OPTIMAL CHIP STRATEGY (pre-tournament map) ----------
-// Given the R32 free-rebuild, optimal chip play is mostly locked in early.
-function computeOptimalChipPlan(squadIds){
-  const sq = (squadIds || STATE.squad).map(id=>PLAYER_BY_ID[id]).filter(Boolean);
-  // Default plan (works without squad). Refined if squad is filled.
-  // Official rule: only ONE booster can be active per matchday (rules: "multiple boosters cannot be used at the same time").
-  // So we spread chips across different MDs.
-  const plan = [
-    { chip: 'Wildcard', primary: 'MD2', alternate: 'R16',
-      ev: 14, conditions: [],
-      narrative: 'Use at MD2 if MD1 lineups invalidate 3+ picks (injuries, surprise benchings, manager XI announcements). Otherwise hold to R16 for mid-knockout reshape if your QF picks get knocked out.',
-      pickPlayer: null,
-    },
-    { chip: 'Qualification Booster', primary: 'R32', alternate: 'R16',
-      ev: 12, conditions: ['One-booster-per-MD rule applies'],
-      narrative: '+2 per starter whose team advances. R32 = most starters still in. Expected: 11 starters × ~55% advance × 2 = +12. Drops to ~9 at R16, ~7 at QF. R32 wins because it has the most surviving teams.',
-      pickPlayer: null,
-    },
-    { chip: 'Mystery Booster', primary: 'R16', alternate: 'QF',
-      ev: 8, conditions: ['Revealed at R32 — adapt'],
-      narrative: 'Unrevealed until R32. Modeled at +8 EV flat. Use at R16 (one round after reveal) — gives you a round to evaluate it. Cannot stack with Qualification Booster at R32 (one-chip-per-MD rule).',
-      pickPlayer: null,
-    },
-    { chip: 'Maximum Captain', primary: 'QF', alternate: 'SF',
-      ev: 7, conditions: [],
-      narrative: 'Auto-double the top scorer in your XI. Best when 3+ captain candidates are close. QF has 8 teams left + cap-relaxation (5/country) means more captain options. Cannot stack with Mystery Booster at R16.',
-      pickPlayer: null,
-    },
-    { chip: '12th Man', primary: 'F', alternate: 'SF',
-      ev: 13, conditions: ['Pick non-squad player from any country'],
-      narrative: 'Adds a 16th scoring player for one MD. No budget/country cap. Best at Final: cap is 8 (most relaxed), best player available is highest single-MD ceiling.',
-      pickPlayer: null,
-    },
-  ];
-  // Drop chips the user has already spent (set via the squad importer), then add specific
-  // player picks for the chips that remain.
-  const used = (STATE.chipsUsed || []).map(c => _norm(c));
-  const activePlan = plan.filter(c => !used.some(u => _norm(c.chip).includes(u) || u.includes(_norm(c.chip).split(' ')[0])));
-  if(sq.length >= 11){
-    activePlan.forEach(c=>{
-      if(c.chip === '12th Man'){
-        const tm = bestTwelfthMan(sq.map(p=>p.id), c.primary);
-        if(tm) c.pickPlayer = tm.p;
-      } else if(c.chip === 'Maximum Captain'){
-        const mc = bestMaxCaptain(sq.map(p=>p.id), c.primary);
-        if(mc) c.pickPlayer = mc.top.p;
-      } else if(c.chip === 'Qualification Booster'){
-        const qb = qualificationBoosterBreakdown(sq.map(p=>p.id), c.primary);
-        if(qb) c.qbDetails = qb;
-      }
-    });
+// ---------- OPTIMAL CHIP STRATEGY (recomputed live) ----------
+// EV per chip per REMAINING round from the current squad + survival model — never a frozen
+// pre-tournament table. The old version hardcoded "Wildcard at MD2 / Qualification at R32" forever,
+// so mid-knockouts it recommended rounds that had already been played and its narratives quoted
+// stale pre-tournament formulas. Rounds are assigned greedily (one booster per MD, official rule).
+const CHIP_LEGAL = {
+  'Wildcard':              r => r !== '1' && r !== 'R32',        // banned MD1 + R32 (official)
+  '12th Man':              () => true,
+  'Maximum Captain':       () => true,
+  'Qualification Booster': r => !/^[1-3]$/.test(r),              // knockout-only
+  'Mystery Booster':       r => !/^[1-3]$/.test(r),              // revealed at R32
+};
+// Live EV for playing `chip` at round `r` with squad `ids`. Returns {ev, why, pick} or null.
+function _chipEV(chip, r, ids){
+  if(!CHIP_LEGAL[chip](r)) return null;
+  const haveSquad = ids && ids.length >= 11;
+  if(chip === 'Qualification Booster'){
+    const qb = haveSquad ? qualificationBoosterBreakdown(ids, r) : null;
+    if(!qb) return null;
+    const top = qb.rows.slice(0,3).map(x=>`${shortName(x.p.name)} ${(x.probAdvance*100).toFixed(0)}%`).join(', ');
+    return { ev: qb.totalEV,
+      why: `+2 × Σ P(advance)×P(plays) over your XI = <b>+${qb.totalEV.toFixed(1)}</b> at ${MD_LABEL(r)}. Biggest contributors: ${top}.` };
   }
-  return activePlan;
+  if(chip === '12th Man'){
+    const tm = haveSquad ? bestTwelfthMan(ids, r) : null;
+    if(!tm) return null;
+    return { ev: tm.weighted, pick: tm.p,
+      why: `Best add: <b>${tm.p.name}</b> (${tm.p.team}) — ${tm.raw.toFixed(1)} xPts × ${(tm.survProb*100).toFixed(0)}% chance the fixture exists = <b>+${tm.weighted.toFixed(1)}</b>.` };
+  }
+  if(chip === 'Maximum Captain'){
+    const mc = haveSquad ? bestMaxCaptain(ids, r) : null;
+    if(!mc || !mc.top) return null;
+    const ev = 2 + Math.max(0, 3 - (mc.delta || 0));   // safety-net value: biggest when top captains are CLOSE
+    return { ev, pick: mc.top.p,
+      why: `Auto-doubles your XI's top scorer. ${mc.top.p.name} ${mc.top.x.toFixed(1)} vs ${mc.second ? mc.second.p.name+' '+mc.second.x.toFixed(1) : '—'} (gap ${(mc.delta||0).toFixed(1)}) — the chip pays most when candidates are close, catching whoever actually hauls.` };
+  }
+  if(chip === 'Wildcard'){
+    const t = {'2':14,'3':6,'R16':10,'QF':7,'SF':5,'F':3}[r]; if(t == null) return null;
+    return { ev: t, why: 'Full free rebuild (heuristic EV — worth most with more rounds left to exploit the reshaped squad, or if eliminations gutted your XI).' };
+  }
+  if(chip === 'Mystery Booster'){
+    return { ev: 8, why: 'Unrevealed until R32 — modelled flat +8 until its effect is known; re-plan when it reveals.' };
+  }
+  return null;
+}
+function computeOptimalChipPlan(squadIds){
+  const ids = (squadIds || STATE.squad).slice();
+  const SEQ = ['1','2','3','R32','R16','QF','SF','F'];
+  const remaining = SEQ.slice(Math.max(0, SEQ.indexOf(String(STATE.md))));
+  const used = (STATE.chipsUsed || []).map(c => _norm(c));
+  const chips = Object.keys(CHIP_LEGAL)
+    .filter(c => !used.some(u => _norm(c).includes(u) || u.includes(_norm(c).split(' ')[0])));
+  // score every (chip, remaining round) with the live model
+  const scored = chips.map(chip => {
+    const byRound = remaining.map(r => ({r, s: _chipEV(chip, r, ids)})).filter(x => x.s);
+    byRound.sort((a,b)=>b.s.ev - a.s.ev);
+    return { chip, byRound };
+  }).filter(c => c.byRound.length);
+  // EXACT one-booster-per-MD assignment maximizing total EV (≤5 chips × ≤8 rounds — a tiny DFS).
+  // Greedy was provably suboptimal: Wildcard grabbed R16 (10.0) pushing Qualification to QF (5.8)
+  // for 15.8 total, when QB@R16 (9.4) + Wildcard@QF (7.0) = 16.4.
+  let bestTotal = -1, bestAssign = null;
+  (function dfs(i, taken, acc, total){
+    if(i === scored.length){
+      if(total > bestTotal){ bestTotal = total; bestAssign = acc.slice(); }
+      return;
+    }
+    const c = scored[i];
+    let any = false;
+    for(const x of c.byRound){
+      if(taken.has(x.r)) continue;
+      any = true;
+      taken.add(x.r); acc.push({c, x});
+      dfs(i+1, taken, acc, total + x.s.ev);
+      acc.pop(); taken.delete(x.r);
+    }
+    if(!any) dfs(i+1, taken, acc, total);   // chip unplaceable (more chips than rounds left)
+  })(0, new Set(), [], 0);
+  const plan = (bestAssign || []).map(({c, x}) => {
+    const alt = c.byRound.find(y => y.r !== x.r) || null;
+    return { chip: c.chip, primary: x.r, alternate: alt ? alt.r : null,
+      ev: x.s.ev, narrative: x.s.why + (alt ? ` Fallback: ${MD_LABEL(alt.r)} (+${alt.s.ev.toFixed(1)}).` : ''),
+      pickPlayer: x.s.pick || null };
+  });
+  plan.sort((a,b)=>b.ev - a.ev);
+  return plan;
 }
 
 // ---------- SQUAD IMPORTER ----------
@@ -10640,7 +10625,10 @@ function toggleChipUsed(chip){
   if(i >= 0) used.splice(i, 1); else used.push(chip);
   STATE.chipsUsed = used;
   try { const imp = JSON.parse(localStorage.getItem('wctd_import') || '{}'); imp.chipsUsed = used; localStorage.setItem('wctd_import', JSON.stringify(imp)); } catch {}
+  // sync the import-box checkboxes so the two chip selectors can't disagree
+  document.querySelectorAll('.import-chip-used').forEach(cb=>{ cb.checked = used.some(u=>_norm(u)===_norm(cb.value)); });
   renderChipStrategyPanel();
+  try { renderChips(); } catch {}       // EV table + 12th-man table share the chip pool
   try { renderDirective(); } catch {}   // the directive's chip call may change
 }
 window.toggleChipUsed = toggleChipUsed;
@@ -10665,7 +10653,7 @@ function renderChipStrategyPanel(){
 
   el.innerHTML = `
     ${selector}
-    <div class="dim" style="font-size:11.5px;margin-bottom:10px">Optimal chip order assumes R32 free rebuild lets you pivot for knockouts. Update if a major event (injury wave, surprise team advancement) shifts the math.</div>
+    <div class="dim" style="font-size:11.5px;margin-bottom:10px">Recomputed live from <b>your squad</b>, current survival odds and the <b>rounds still to play</b> — one booster per matchday (official rule). Tick a chip above and the whole plan reflows.</div>
     <div class="row" style="gap:4px;margin-bottom:12px;font-size:11px">
       ${timeline.map((t,i)=>{
         const chips = mdChips[t] || [];
