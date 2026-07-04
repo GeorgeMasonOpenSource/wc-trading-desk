@@ -4397,13 +4397,21 @@ function _bestCaptainId(squadIds, md){
 }
 
 function _findBestSingleTransfer(squadIds, mdsRemaining, bank, capPerCountry){
-  // Rank swaps by the change in STARTING-XI points (auto-sub + captain aware) summed over the
-  // remaining MDs — NOT a player's raw projection. A swap of a benched player that doesn't change
-  // your XI scores ~0, so the engine no longer fixates on bench-for-bench upgrades and misses real
-  // XI improvements. To stay fast, each out-player is matched only against the top few affordable
-  // same-position candidates by raw projection, then those are scored on true XI impact.
+  // Score = ΔSTARTING-XI points this round (auto-sub aware)  +  0.5 × Δsurvival-weighted RUN-IN EV.
+  // The XI term alone was blind to WHICH player you give up when two swaps produce the same XI:
+  // selling an XI defender for Digne and selling a BENCHED defender for Digne both "gain +1.6"
+  // (Digne enters the XI either way), and the tie fell to squad order — so it told the user to
+  // sell Cucurella (4.7 xPts, Spain likely advancing) while Dias/Konsa sat on the bench. The
+  // run-in term (projectHorizon: survival-weighted rounds after this one) makes the residual value
+  // of the player kept/lost part of the score — eliminated players carry zero run-in, so shipping
+  // them out dominates naturally. Run-in is half-weighted: future value is partly recoverable via
+  // later free transfers (4/5/6 per round from R16), so a full weight would overtrade the future.
+  const RESID_W = 0.5;
+  const mdNow = mdsRemaining[0];
+  const horizon = _remainingHorizon();
   const cc = _squadCountries(squadIds);
   const baseXi = mdsRemaining.reduce((a,m)=>a + _gwScore(squadIds, m), 0);
+  const residOf = p => Math.max(0, (projectHorizon(p, horizon)?.total || 0) - (projectXPts(p, mdNow)?.xpts || 0));
   const candidatesByPos = {GK:[],DEF:[],MID:[],FWD:[]};
   PLAYERS.forEach(p=>{ if(!squadIds.includes(p.id)) candidatesByPos[p.pos].push(p); });
   let best = null;
@@ -4411,22 +4419,19 @@ function _findBestSingleTransfer(squadIds, mdsRemaining, bank, capPerCountry){
     const out = PLAYER_BY_ID[outId];
     const ccMinusOut = {...cc}; ccMinusOut[out.team]--; if(ccMinusOut[out.team]===0) delete ccMinusOut[out.team];
     const newBank = bank + out.price;
+    const outResid = residOf(out);
     // shortlist: affordable, cap-legal, same position, top 8 by raw remaining-MD projection
     const shortlist = candidatesByPos[out.pos]
       .filter(c => c.price <= newBank + 0.001 && (ccMinusOut[c.team]||0) < capPerCountry)
       .map(c => ({c, raw: mdsRemaining.reduce((a,m)=>a + (projectXPts(c, m)?.xpts || 0), 0)}))
       .sort((a,b)=>b.raw - a.raw).slice(0, 8);
-    // Freeing a KNOCKED-OUT player's slot carries option value beyond this round's XI score (he is
-    // dead weight for every remaining round and can't even bench-cover), so eliminated-outs get a
-    // small bonus. Without it, swapping an eliminated bench player ties with swapping a weak ALIVE
-    // starter (identical resulting XI) and the greedy kept whichever came first in squad order —
-    // e.g. suggesting Bellingham→Casemiro while eliminated Wirtz stayed in the squad.
-    const outDead = isEliminated(out.team) ? 0.2 : 0;
     for(const {c} of shortlist){
       const sq = squadIds.map(x => x===outId ? c.id : x);
-      const xiGain = mdsRemaining.reduce((a,m)=>a + _gwScore(sq, m), 0) - baseXi + outDead;
-      if(!best || xiGain > best.delta){
-        best = {outId, inId:c.id, delta:xiGain, netCost: c.price - out.price, newBank: newBank - c.price};
+      const xiGain = mdsRemaining.reduce((a,m)=>a + _gwScore(sq, m), 0) - baseXi;
+      const resid = RESID_W * (residOf(c) - outResid);
+      const score = xiGain + resid;
+      if(!best || score > best.delta){
+        best = {outId, inId:c.id, delta:score, xiGain, resid, netCost: c.price - out.price, newBank: newBank - c.price};
       }
     }
   }
@@ -4452,7 +4457,7 @@ function recommendFreeTransfers(squadIds, md){
   for(let i=0; i<alloc; i++){
     const m = _findBestSingleTransfer(squad, [md], bank, cap);
     if(!m || m.delta <= 0.5) break;                 // no worthwhile free move left → stop (don't waste it)
-    moves.push({ outId:m.outId, inId:m.inId, out:PLAYER_BY_ID[m.outId], in:PLAYER_BY_ID[m.inId], delta:m.delta, netCost:m.netCost });
+    moves.push({ outId:m.outId, inId:m.inId, out:PLAYER_BY_ID[m.outId], in:PLAYER_BY_ID[m.inId], delta:m.delta, xiGain:m.xiGain, resid:m.resid, netCost:m.netCost });
     squad = _applyTransfer(squad, m);
     bank = m.newBank;
   }
@@ -4986,7 +4991,7 @@ function _transferRecHtml(md){
   }
   const alloc = rec?.alloc ?? FT_ALLOC[md];
   if(rec && rec.moves.length){
-    const list = rec.moves.map((m,i)=>`<div style="margin-top:${i?4:6}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} xPts · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
+    const list = rec.moves.map((m,i)=>`<div style="margin-top:${i?4:6}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} xPts${m.xiGain!=null?` (this GW ${m.xiGain>=0?'+':''}${m.xiGain.toFixed(1)} · run-in ${m.resid>=0?'+':''}${m.resid.toFixed(1)})`:''} · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
     const spec = rec.moves.map(m=>`${m.outId}:${m.inId}`).join(',');
     return `<div class="rec"><div><div class="title">Transfers — use ${rec.moves.length} of ${alloc} free (no hit)</div><div class="sub">Best moves within your free allowance for ${MD_LABEL(md)} — total <b class="good">+${rec.totalDelta.toFixed(1)} xPts</b>, zero points hit:${list}<div style="margin-top:8px"><button class="primary" onclick="applyMoves('${spec}')">✓ Apply ${rec.moves.length>1?'all '+rec.moves.length:''} transfer${rec.moves.length>1?'s':''}</button></div></div></div><div class="ev good">+${rec.totalDelta.toFixed(1)}</div></div>`;
   }
