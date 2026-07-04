@@ -10521,10 +10521,16 @@ window.importSquadFromText = importSquadFromText;
 // the live feed vs the baked snapshot). Only seeds first-time/empty state — any import, transfer, or
 // save overwrites it through the normal autosave path, so it never fights a user's own team.
 const DEFAULT_MY_TEAM = {
+  // version bumps when the owner updates his official-game state (squad/armband) — existing devices
+  // still carrying an UNMODIFIED older default migrate forward on load (see migrateDefaultTeam).
+  version: 2,   // R16 (2026-07-04 screenshot): captain moved Medina → Vinícius Júnior
   names: ['Matt Freese','Raúl Rangel','Facundo Medina','Marc Cucurella','Ezri Konsa','Rúben Dias',
           'Lisandro Martínez','Jude Bellingham','Florian Wirtz','Ousmane Dembélé','Vinícius Júnior',
           'Granit Xhaka','Kylian Mbappé','Harry Kane','Lionel Messi'],
-  captain: 'Facundo Medina', vice: 'Florian Wirtz', chipsUsed: [], bank: 0.4, free: 2,
+  // Vice mirrors the official app (Wirtz) even though GER are out — the in-app elimination rule
+  // auto-redirects an eliminated vice, which is exactly the advice surface working as intended.
+  captain: 'Vinícius Júnior', vice: 'Florian Wirtz', chipsUsed: [], bank: 0.4, free: 4,
+  prevCaptains: ['Facundo Medina'],   // earlier bakes' captains — used to detect "never customised"
 };
 function loadDefaultMyTeam(){
   if(typeof resolvePlayerName !== 'function') return false;
@@ -10544,10 +10550,37 @@ function loadDefaultMyTeam(){
   // seed the My Team baseline + import-form memory so Save/Reset and the import box reflect it
   try {
     localStorage.setItem('wctd_myteam', JSON.stringify({squad:[...ids], captainId:STATE.captainId,
-      viceId:STATE.viceId, chipsUsed:[...STATE.chipsUsed], bank:DEFAULT_MY_TEAM.bank, free:DEFAULT_MY_TEAM.free, savedAt:Date.now()}));
+      viceId:STATE.viceId, chipsUsed:[...STATE.chipsUsed], bank:DEFAULT_MY_TEAM.bank, free:DEFAULT_MY_TEAM.free,
+      defaultVersion: DEFAULT_MY_TEAM.version, savedAt:Date.now()}));
     localStorage.setItem('wctd_import', JSON.stringify({text:DEFAULT_MY_TEAM.names.join('\n'),
       bank:String(DEFAULT_MY_TEAM.bank), free:String(DEFAULT_MY_TEAM.free), chips:[...DEFAULT_MY_TEAM.chipsUsed]}));
   } catch {}
+  return true;
+}
+
+// Devices that restored an OLDER unmodified default bake migrate to the current one. "Unmodified"
+// = same 15 players AND the armband still on an earlier bake's captain (a user who set their own
+// captain, or changed players, is never touched). Runs once per version bump.
+function migrateDefaultTeam(){
+  if(typeof resolvePlayerName !== 'function' || STATE.squad.length !== 15) return false;
+  const base = _readMyTeam();
+  const storedV = base && base.defaultVersion;
+  if(!storedV || storedV >= DEFAULT_MY_TEAM.version) return false;
+  const wantIds = DEFAULT_MY_TEAM.names.map(nm=>{ const r = resolvePlayerName(nm); return (r && !r.ambiguous && r.p) ? r.p.id : null; });
+  if(wantIds.some(id=>id==null)) return false;
+  const same = wantIds.length === STATE.squad.length && wantIds.every(id=>STATE.squad.includes(id));
+  const prevCapIds = (DEFAULT_MY_TEAM.prevCaptains||[]).map(nm=>{ const r = resolvePlayerName(nm); return r && r.p ? r.p.id : null; });
+  const armbandUntouched = !STATE.captainId || prevCapIds.includes(STATE.captainId);
+  if(!same || !armbandUntouched) return false;
+  const cap = resolvePlayerName(DEFAULT_MY_TEAM.captain), vc = resolvePlayerName(DEFAULT_MY_TEAM.vice);
+  STATE.captainId = (cap && !cap.ambiguous && cap.p) ? cap.p.id : STATE.captainId;
+  STATE.viceId    = (vc && !vc.ambiguous && vc.p) ? vc.p.id : STATE.viceId;
+  try {
+    const upd = Object.assign({}, base, {captainId:STATE.captainId, viceId:STATE.viceId,
+      defaultVersion: DEFAULT_MY_TEAM.version, savedAt:Date.now()});
+    localStorage.setItem('wctd_myteam', JSON.stringify(upd));
+  } catch {}
+  console.log('[default-team] migrated armband to bake v'+DEFAULT_MY_TEAM.version+':', DEFAULT_MY_TEAM.captain);
   return true;
 }
 
@@ -11050,6 +11083,9 @@ async function bootstrap(){
   // baked squad as their team, not the optimizer's. Persists via autosave so reloads restore it the
   // normal way; any edit/import overwrites it. Skipped entirely once a real squad has been restored.
   if(STATE.squad.length === 0 && loadDefaultMyTeam() && typeof autoSaveCurrent === 'function') autoSaveCurrent();
+  // Existing device carrying an older UNMODIFIED default bake → adopt the new armband (never fires
+  // for users who customised their squad or captain).
+  else if(migrateDefaultTeam() && typeof autoSaveCurrent === 'function') autoSaveCurrent();
   // Run the optimizer so the Optimizer tab is populated, but ONLY adopt its XV as the active
   // squad for a first-time visitor with no team of their own. If the user has imported/saved a
   // squad (restored above), that is THEIR team — never overwrite it with the optimizer's.
