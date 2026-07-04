@@ -3634,6 +3634,13 @@ function computeSurvival(team){
   if(typeof KNOCKOUTS !== 'undefined' && Object.keys(KNOCKOUTS).length){
     const ko = KNOCKOUTS[team];
     if(!ko || !ko.R32) return {R32:0, R16:0, QF:0, SF:0, F:0};   // eliminated in the group stage
+    // KNOCKED OUT mid-bracket: P(reach) = 1 for rounds they actually played, 0 beyond — the Elo
+    // model below kept giving eliminated teams healthy QF/SF odds (GER showed 47%/23% while out).
+    if(typeof isEliminated === 'function' && isEliminated(team)){
+      const out = {R32:0, R16:0, QF:0, SF:0, F:0};
+      for(const r of ['R32','R16','QF','SF','F']){ if(ko[r]) out[r] = 1; }
+      return out;
+    }
     const oppElo = (ko.R32.opp && TEAMS[ko.R32.opp]) ? TEAMS[ko.R32.opp].elo : 1850;
     const pR16 = _eloAdvance(t.elo, oppElo);                      // win the (known) R32 tie → reach R16
     const pQF  = pR16 * Math.max(0.20, _eloAdvance(t.elo, 1900)); // later opponents unknown → tier Elo
@@ -6262,12 +6269,14 @@ function renderChips(){
   // MD2" shown mid-R16) was meaningless and made the panel read as broken.
   const SEQ = ['1','2','3','R32','R16','QF','SF','F'];
   const mds = SEQ.slice(Math.max(0, SEQ.indexOf(String(STATE.md))));
+  // Chips fire on the squad you'll hold AFTER this GW's recommended transfers (see _postTransferSquad).
+  const _pt = _postTransferSquad();
   // Optimal 12th Man per MD
   const t12 = document.getElementById('twelfth-table');
   if(t12 && STATE.squad.length >= 11){
     let rows = '<thead><tr><th>MD</th><th>Best 12th Man</th><th>Team</th><th>vs</th><th class="num">Raw xP</th><th class="num">Survival</th><th class="num">Expected xP</th></tr></thead><tbody>';
     for(const m of mds){
-      const tm = bestTwelfthMan(STATE.squad, m);
+      const tm = bestTwelfthMan(_pt.ids, m);
       if(!tm){ rows += `<tr><td>${MD_LABEL(m)}</td><td colspan="6" class="dim">—</td></tr>`; continue; }
       const r = projectXPts(tm.p, m);
       const opp = r?.fx?.opp || '—';
@@ -6285,7 +6294,7 @@ function renderChips(){
   const evGrid = {};
   mds.forEach(md=>{
     evGrid[md]={};
-    chips.forEach(c=>{ const s = _chipEV(c, md, STATE.squad); evGrid[md][c] = s ? Math.round(s.ev*10)/10 : null; });
+    chips.forEach(c=>{ const s = _chipEV(c, md, _pt.ids); evGrid[md][c] = s ? Math.round(s.ev*10)/10 : null; });
   });
 
   const tbl = document.getElementById('chip-table');
@@ -6312,7 +6321,9 @@ function renderChips(){
   // matchday (illegal — one booster per MD) and ticking a chip as used didn't remove it here.
   const planEl = document.getElementById('chip-plan');
   if(planEl){
-    const plan = computeOptimalChipPlan(STATE.squad);
+    const pt = _pt;
+    const plan = computeOptimalChipPlan(pt.ids);
+    const assumeNote = pt.moves.length ? `<div class="dim" style="font-size:11px;margin-bottom:8px">📋 Planned on your squad <b>after this gameweek's recommended transfers</b> (${pt.moves.map(m=>`${m.out?.name.split(' ').pop()}→${m.in?.name.split(' ').pop()}`).join(' · ')}) — chips fire on the team you'll actually hold.</div>` : '';
     const usedList = STATE.chipsUsed || [];
     const ALL_CHIPS_CB = ['Wildcard','12th Man','Maximum Captain','Qualification Booster','Mystery Booster'];
     const usedSet = new Set(usedList.map(c=>_norm(c)));
@@ -6320,7 +6331,7 @@ function renderChips(){
       <div class="dim" style="font-size:11px;margin-bottom:5px">Chips you've already used (tick to remove — plan reflows instantly):</div>
       <div class="row" style="gap:12px;flex-wrap:wrap;font-size:12px">${ALL_CHIPS_CB.map(c=>`<label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" ${usedSet.has(_norm(c))?'checked':''} onchange="toggleChipUsed('${c}')"> ${c}</label>`).join('')}</div>
     </div>`;
-    planEl.innerHTML = selector + (plan.length ? plan.map((c,i)=>`<div class="rec ${i<2?'':'warn'}">
+    planEl.innerHTML = selector + assumeNote + (plan.length ? plan.map((c,i)=>`<div class="rec ${i<2?'':'warn'}">
       <div>
         <div class="title">${i+1}. ${c.chip} — play at <b>${MD_LABEL(c.primary)}</b>${c.alternate?` <span class="dim">(fallback: ${MD_LABEL(c.alternate)})</span>`:''}</div>
         <div class="sub" style="line-height:1.5">${c.narrative}</div>
@@ -10369,6 +10380,19 @@ function _chipEV(chip, r, ids){
   }
   return null;
 }
+// The squad you'll actually HOLD when a chip fires = current squad + this GW's recommended free
+// transfers. Chip EVs (especially the Qualification Booster, which sums P(advance) over your XI)
+// move materially with those transfers, so the chip panels plan on the post-transfer squad and say
+// so — planning chips on a squad you're about to change was quietly wrong.
+function _postTransferSquad(){
+  try {
+    const rec = recommendFreeTransfers(STATE.squad, STATE.md);
+    if(!rec || rec.unlimited || !rec.moves || !rec.moves.length) return {ids: STATE.squad.slice(), moves: []};
+    let ids = STATE.squad.slice();
+    rec.moves.forEach(m=>{ ids = ids.map(id=>id===m.outId?m.inId:id); });
+    return {ids, moves: rec.moves};
+  } catch { return {ids: STATE.squad.slice(), moves: []}; }
+}
 function computeOptimalChipPlan(squadIds){
   const ids = (squadIds || STATE.squad).slice();
   const SEQ = ['1','2','3','R32','R16','QF','SF','F'];
@@ -10689,7 +10713,8 @@ window.toggleChipUsed = toggleChipUsed;
 function renderChipStrategyPanel(){
   const el = document.getElementById('chip-strategy-panel');
   if(!el) return;
-  const plan = computeOptimalChipPlan(STATE.squad);
+  const pt = _postTransferSquad();
+  const plan = computeOptimalChipPlan(pt.ids);
   const md = STATE.md;
   const timeline = ['1','2','3','R32','R16','QF','SF','F'];
   const curIdx = timeline.indexOf(md);
@@ -10707,7 +10732,7 @@ function renderChipStrategyPanel(){
 
   el.innerHTML = `
     ${selector}
-    <div class="dim" style="font-size:11.5px;margin-bottom:10px">Recomputed live from <b>your squad</b>, current survival odds and the <b>rounds still to play</b> — one booster per matchday (official rule). Tick a chip above and the whole plan reflows.</div>
+    <div class="dim" style="font-size:11.5px;margin-bottom:10px">Recomputed live from <b>your squad${pt.moves.length?' after this GW\'s recommended transfers':''}</b>, current survival odds and the <b>rounds still to play</b> — one booster per matchday (official rule). Tick a chip above and the whole plan reflows.${pt.moves.length?`<br>📋 Assumed moves: ${pt.moves.map(m=>`${m.out?.name.split(' ').pop()}→${m.in?.name.split(' ').pop()}`).join(' · ')}`:''}</div>
     <div class="row" style="gap:4px;margin-bottom:12px;font-size:11px">
       ${timeline.map((t,i)=>{
         const chips = mdChips[t] || [];
