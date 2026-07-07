@@ -9952,10 +9952,24 @@ const TEST_SUITE = [
       return {pass:true};
     }
   },
-  { name: 'Projected bracket: known R16 matchup surfaces via tree (BRA → NOR)',
+  { name: 'Projected bracket: an alive team with a bound next round gets a real tree opponent',
     fn: () => {
-      const r = getOppFor('BRA','R16');
-      return (r && r.opp === 'NOR') ? {pass:true} : {pass:false, msg:`got ${r && r.opp}`};
+      // Progression-robust: don't hardcode a matchup that a result can invalidate. Find any alive
+      // team whose CURRENT-round opponent is known in the tree and assert getOppFor surfaces a real
+      // team. If the bracket hasn't bound any yet (early), the mechanism is exercised by the
+      // synthetic favourites-advance test below, so pass vacuously.
+      const rounds = ['R16','QF','SF','F'];
+      for(const rd of rounds){
+        for(const t of Object.keys(TEAMS)){
+          if(isEliminated(t) || (KNOCKOUTS[t] && KNOCKOUTS[t][rd])) continue;   // skip resolved-in-KNOCKOUTS
+          const pj = projectedOpponent(t, rd);
+          if(pj && TEAMS[pj.opp]){
+            const r = getOppFor(t, rd);
+            return (r && r.opp === pj.opp) ? {pass:true} : {pass:false, msg:`${t} ${rd}: getOppFor=${r&&r.opp} vs projected ${pj.opp}`};
+          }
+        }
+      }
+      return {pass:true, msg:'no bound projected path yet (vacuous)'};
     }
   },
   { name: 'Projected bracket: favourites-advance picks the Elo max of an undecided tie',
@@ -9965,15 +9979,17 @@ const TEST_SUITE = [
       return favOK ? {pass:true} : {pass:false, msg:`favoured ${fav}`};
     }
   },
-  { name: 'Elimination: knocked-out teams project zero for remaining rounds, tournament has survivors',
+  { name: 'Elimination: a knocked-out team projects null and survivors remain',
     fn: () => {
-      // GER lost the R32 (slot 2, decided) and SCO never reached the bracket — both permanent facts.
-      const gerOut = isEliminated('GER'), scoOut = isEliminated('SCO');
-      const wirtz = PLAYERS.find(p=>p.team==='GER' && p.pos==='MID');
-      const zeroed = wirtz ? projectXPts(wirtz,'R16') === null : false;
-      const survivors = Object.keys(TEAMS).filter(t=>!isEliminated(t)).length >= 1;
-      return (gerOut && scoOut && zeroed && survivors) ? {pass:true}
-        : {pass:false, msg:`GER ${gerOut} SCO ${scoOut} zeroed ${zeroed} survivors ${survivors}`};
+      // Robust to which teams are out: derive an eliminated team from the live bracket rather than
+      // naming one. Any team in KNOCKOUTS that lost a decided tie must be eliminated + project null.
+      const elimTeam = Object.keys(TEAMS).find(t => KNOCKOUTS[t] && isEliminated(t));
+      if(!elimTeam) return {pass:true, msg:'no eliminations yet (vacuous)'};   // group stage
+      const player = PLAYERS.find(p=>p.team===elimTeam && p.pos!=='GK');
+      const anyKoRound = ['R16','QF','SF','F'].find(rd => KNOCKOUTS[elimTeam] && !KNOCKOUTS[elimTeam][rd]) || 'F';
+      const zeroed = player ? projectXPts(player, anyKoRound) === null : true;
+      const survivors = Object.keys(TEAMS).filter(t=>KNOCKOUTS[t] && !isEliminated(t)).length >= 1;
+      return (zeroed && survivors) ? {pass:true} : {pass:false, msg:`${elimTeam} zeroed ${zeroed} survivors ${survivors}`};
     }
   },
   { name: 'Form factor: identity w/o data, marks down non-producers, bounded',
@@ -11147,6 +11163,16 @@ async function bootstrap(){
   }
   refresh();
   _hideLoading();   // first render done — reveal the app
+  // AUTO-SNAPSHOT the round about to be played (once), so the per-position calibration/accountability
+  // loop actually accumulates results over time instead of staying dormant behind a manual button.
+  // Deferred so it never blocks first paint; only the plan round, only if not already captured
+  // (never overwrites an earlier pre-round snapshot with a mid-round one).
+  try {
+    const snapMd = (det && det.plan) || STATE.md;
+    if(snapMd && typeof getSnapshot === 'function' && !getSnapshot(snapMd)){
+      setTimeout(()=>{ try { snapshotProjections(snapMd); } catch {} }, 2200);
+    }
+  } catch {}
   // Results feedback loop: recompute calibration from the latest actuals; if it's trained, re-render
   // so the learned correction applies this session too (the cached value already applied on load).
   refreshCalibration().then(cal=>{ if(cal && cal._n >= 10) refresh(); });
