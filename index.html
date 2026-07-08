@@ -568,7 +568,7 @@
         <li><b class="mono" style="color:var(--ink)">12th Man</b> — add a 16th player who scores points (any country/budget).</li>
         <li><b class="mono" style="color:var(--ink)">Maximum Captain</b> — captain auto-assigned to highest-scoring player in your <b>starting XI</b> (not bench). +2 from Qualification Booster on captain is NOT doubled.</li>
         <li><b class="mono" style="color:var(--ink)">Qualification Booster</b> — +2 to every <b>starter</b> who plays 1+ min AND their team advances. Available R32 onwards.</li>
-        <li><b class="mono" style="color:var(--ink)">Mystery Booster</b> — unrevealed until R32. Modeled as expected 8.0 pts EV.</li>
+        <li><b class="mono" style="color:var(--ink)">Mystery Booster</b> — every GK/DEF/MID keeps their clean sheet unless the team concedes 2+. EV = Σ CS-pts × P(concede exactly 1) over your defensive XI.</li>
       </ul>
     </div>
   </div>
@@ -767,7 +767,7 @@ cs_prob       = exp(-team_xGA × adj_minutes / 90)
         <div class="dim" style="margin-top:8px">
         [PLAUSIBLE] Player goal/assist shares are inferred from price tier within position. PK/FK takers are hand-curated for known set-piece specialists (~40 players); everyone else defaults to 0.<br>
         [ESTABLISHED] Prices, positions, and ownership pulled from play.fifa.com/json/fantasy/players.json (1,454 players, official FIFA API) on May 30 2026.<br>
-        [UNKNOWN] Mystery Booster mechanics — modeled as flat 8 pts EV until revealed before R32.<br>
+        [REVEALED R16] Mystery Booster = GK/DEF/MID keep the clean-sheet bonus unless conceding 2+. EV modelled from team xGA (Poisson P of conceding exactly 1) × CS points × minutes.<br>
         [ESTABLISHED] Ownership = percentSelected from FIFA API at fetch time. Re-fetch the API to refresh.
         </div>
       </details>
@@ -5173,7 +5173,7 @@ function renderDashboard(){
     <div class="tile"><div class="lbl">Spend</div><div class="v">$${spend.toFixed(1)}m</div><div class="delta dim">${(STATE.budget-spend).toFixed(1)}m bank</div></div>
     <div class="tile"><div class="lbl">Squad · ${MD_LABEL(md)}</div><div class="v">${xPtsMD.toFixed(1)}</div><div class="delta dim">${squadPlayers.length}/15 incl bench</div></div>
     <div class="tile"><div class="lbl">Countries</div><div class="v">${new Set(squadPlayers.map(p=>p.team)).size}</div><div class="delta dim">max 3 per (h=3)</div></div>
-    <div class="tile" title="Heuristic axes stripped: scout EV removed (Mystery Booster unverified), tk/cc/sot defaults zeroed for non-curated players, bonus_exp cut to 0.15. Bookmaker CS, team xG, MRI from observed minutes stay full-weight."><div class="lbl">Model mode</div><div class="v good" style="font-size:18px">STRICT</div><div class="delta dim">data-grounded only</div></div>
+    <div class="tile" title="Heuristic axes stripped: scout EV removed, tk/cc/sot defaults zeroed for non-curated players, bonus_exp cut to 0.15. Bookmaker CS, team xG, MRI from observed minutes stay full-weight."><div class="lbl">Model mode</div><div class="v good" style="font-size:18px">STRICT</div><div class="delta dim">data-grounded only</div></div>
   `;
 
   // pitch
@@ -9976,6 +9976,34 @@ window.bestTwelfthMan = bestTwelfthMan;
 window.bestMaxCaptain = bestMaxCaptain;
 window.qualificationBoosterBreakdown = qualificationBoosterBreakdown;
 
+// Mystery Booster (revealed at R16, 2026): every GK/DEF/MID keeps their clean-sheet bonus unless
+// their team concedes 2+ (normally lost on the 1st goal). Value at round `md` = Σ over your
+// CS-eligible XI of  CS_points × P(team concedes EXACTLY 1) × P(plays 60+) × P(fixture exists).
+// P(concede exactly 1) = Poisson(λ = team xGA) at k=1 = xGA·e^(−xGA). Highest when your GK/DEF play
+// tight favourites (low xGA → the 1-goal case they now survive is the likely one).
+function mysteryBoosterBreakdown(squadIds, md){
+  const sq = (squadIds || STATE.squad).map(id=>PLAYER_BY_ID[id]).filter(Boolean);
+  if(sq.length < 11) return null;
+  const xi = chooseXI(sq.map(p=>({...p, xptsHor: projectHorizon(p, 3).total})));
+  const isKO = typeof md === 'string' && !/^[1-3]$/.test(md);
+  let totalEV = 0; const rows = [];
+  for(const p of xi){
+    const csPts = (SCORING.cleanSheet[p.pos] || 0);
+    if(csPts <= 0) continue;                         // FWD gets no CS → booster does nothing for them
+    const r = projectXPts(p, md); if(!r || r.teamXGA == null) continue;
+    const xga = r.teamXGA;
+    const pConcede1 = xga * Math.exp(-xga);          // Poisson P(exactly 1 conceded)
+    const playProb = (p.mriByMd && p.mriByMd[String(md)] != null) ? p.mriByMd[String(md)] : p.mri;
+    const surv = isKO ? (computeSurvival(p.team)[md] ?? 1) : 1;
+    const ev = csPts * pConcede1 * playProb * surv;
+    totalEV += ev;
+    rows.push({p, csPts, pConcede1, teamXGA: xga, ev});
+  }
+  rows.sort((a,b)=>b.ev-a.ev);
+  return {totalEV, rows};
+}
+window.mysteryBoosterBreakdown = mysteryBoosterBreakdown;
+
 
 // ---------- TEST SUITE ----------
 // Runs on every page load. Surfaces silent regressions.
@@ -10450,7 +10478,11 @@ function _chipEV(chip, r, ids){
     return { ev: t, why: 'Full free rebuild (heuristic EV — worth most with more rounds left to exploit the reshaped squad, or if eliminations gutted your XI).' };
   }
   if(chip === 'Mystery Booster'){
-    return { ev: 8, why: 'Unrevealed until R32 — modelled flat +8 until its effect is known; re-plan when it reveals.' };
+    const mb = haveSquad ? mysteryBoosterBreakdown(ids, r) : null;
+    if(!mb) return null;
+    const top = mb.rows.slice(0,3).map(x=>`${shortName(x.p.name)} ${(x.pConcede1*100).toFixed(0)}%`).join(', ');
+    return { ev: mb.totalEV,
+      why: `Clean sheets survive the 1st goal conceded (GK/DEF/MID). Gain = Σ CS-pts × P(team concedes exactly 1) over your defensive XI = <b>+${mb.totalEV.toFixed(1)}</b> at ${MD_LABEL(r)}. Best where your GK/DEF face tight favourites: ${top}. <b>Lever:</b> start extra defenders that round to bank more of it.` };
   }
   return null;
 }
@@ -10626,13 +10658,17 @@ window.importSquadFromText = importSquadFromText;
 const DEFAULT_MY_TEAM = {
   // version bumps when the owner updates his official-game state (squad/armband) — existing devices
   // still carrying an UNMODIFIED older default migrate forward on load (see migrateDefaultTeam).
-  version: 2,   // R16 (2026-07-04 screenshot): captain moved Medina → Vinícius Júnior
+  version: 3,   // QF (2026-07-07): chips 4/5 spent — only Mystery Booster (clean-sheet) remains
   names: ['Matt Freese','Raúl Rangel','Facundo Medina','Marc Cucurella','Ezri Konsa','Rúben Dias',
           'Lisandro Martínez','Jude Bellingham','Florian Wirtz','Ousmane Dembélé','Vinícius Júnior',
           'Granit Xhaka','Kylian Mbappé','Harry Kane','Lionel Messi'],
   // Vice mirrors the official app (Wirtz) even though GER are out — the in-app elimination rule
   // auto-redirects an eliminated vice, which is exactly the advice surface working as intended.
-  captain: 'Vinícius Júnior', vice: 'Florian Wirtz', chipsUsed: [], bank: 0.4, free: 4,
+  captain: 'Vinícius Júnior', vice: 'Florian Wirtz',
+  // Confirmed spent (official app, QF screenshot): Max Captain RD1, 12th Man RD2, Wildcard RD3,
+  // Qualification R16. Only Mystery Booster left → the chip planner now plans that one alone.
+  chipsUsed: ['Maximum Captain','12th Man','Wildcard','Qualification Booster'],
+  bank: 0.4, free: 4,
   prevCaptains: ['Facundo Medina'],   // earlier bakes' captains — used to detect "never customised"
 };
 function loadDefaultMyTeam(){
