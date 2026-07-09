@@ -10690,18 +10690,17 @@ window.importSquadFromText = importSquadFromText;
 const DEFAULT_MY_TEAM = {
   // version bumps when the owner updates his official-game state (squad/armband) — existing devices
   // still carrying an UNMODIFIED older default migrate forward on load (see migrateDefaultTeam).
-  version: 3,   // QF (2026-07-07): chips 4/5 spent — only Mystery Booster (clean-sheet) remains
-  names: ['Matt Freese','Raúl Rangel','Facundo Medina','Marc Cucurella','Ezri Konsa','Rúben Dias',
-          'Lisandro Martínez','Jude Bellingham','Florian Wirtz','Ousmane Dembélé','Vinícius Júnior',
-          'Granit Xhaka','Kylian Mbappé','Harry Kane','Lionel Messi'],
-  // Vice mirrors the official app (Wirtz) even though GER are out — the in-app elimination rule
-  // auto-redirects an eliminated vice, which is exactly the advice surface working as intended.
-  captain: 'Vinícius Júnior', vice: 'Florian Wirtz',
-  // Confirmed spent (official app, QF screenshot): Max Captain RD1, 12th Man RD2, Wildcard RD3,
-  // Qualification R16. Only Mystery Booster left → the chip planner now plans that one alone.
+  version: 4,   // QF (2026-07-09 screenshot): Xhaka/Bellingham/Wirtz/Dias transferred out for
+                // Cubarsí/MacAllister/Olise/Casemiro; armband on Mbappé. Still carries 4 eliminated.
+  names: ['Matt Freese','Raúl Rangel','Pau Cubarsí','Marc Cucurella','Ezri Konsa','Facundo Medina',
+          'Lisandro Martínez','Alexis Mac Allister','Michael Olise','Ousmane Dembélé','Vinícius Júnior',
+          'Casemiro','Kylian Mbappé','Harry Kane','Lionel Messi'],
+  captain: 'Kylian Mbappé', vice: 'Michael Olise',
+  // Confirmed spent (official app): Max Captain RD1, 12th Man RD2, Wildcard RD3, Qualification R16.
+  // Only Mystery Booster (clean-sheet) remains.
   chipsUsed: ['Maximum Captain','12th Man','Wildcard','Qualification Booster'],
   bank: 0.4, free: 4,
-  prevCaptains: ['Facundo Medina'],   // earlier bakes' captains — used to detect "never customised"
+  prevCaptains: ['Facundo Medina','Vinícius Júnior'],   // earlier bakes' captains — detect "never customised"
 };
 function loadDefaultMyTeam(){
   if(typeof resolvePlayerName !== 'function') return false;
