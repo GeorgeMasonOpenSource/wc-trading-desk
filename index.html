@@ -8943,6 +8943,23 @@ function applyLineupOverrides(){
     if(p._mriPreLineup === undefined) p._mriPreLineup = p.mri;
     else p.mri = p._mriPreLineup;  // reset before reapplying
 
+    // LIVE WC MINUTES WIN. Once a player has real World Cup appearances (roundPoints → inferMRI,
+    // formApps≥2), p.mri already reflects who actually STARTS. The pre-tournament friendly "observed"
+    // data and the ownership proxies below are stale and must NOT override it — they pinned Bellingham
+    // (5/5 WC starts, avg 8.4) at 0.23 from 1/5 friendly starts, rescued only by his 36% ownership
+    // floor, while a low-owned-but-playing star (De Bruyne, 4.3%) got no rescue. Fall back to observed
+    // friendlies + ownership tiers ONLY when there is no live WC data (pre-tournament or offline).
+    if((p.formApps || 0) >= 2){
+      p._observed = OBSERVED_PLAYERS[p.id] || null;
+      p._lineupSource = 'observed-live';
+      const stLive = (p.status || '').toLowerCase();
+      if(/injur|suspend|unavail|\bout\b|ban|eliminat/.test(stLive)) p.mri = Math.min(p.mri, 0.05);
+      p.mri = Math.min(0.95, Math.max(0.05, p.mri));
+      p._simCache = null;
+      countObs++;
+      return;
+    }
+
     const obs = OBSERVED_PLAYERS[p.id];
     if(obs){
       const sp = obs.starter_prob;
