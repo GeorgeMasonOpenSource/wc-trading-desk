@@ -310,7 +310,7 @@
     <span>Spend: <b id="conn-spend" class="mono">$0.0m</b></span>
     <span>Free transfers: <b id="conn-ft" class="mono">—</b></span>
     <span>MD: <button id="md-prev" style="padding:3px 6px">‹</button> <select id="conn-md" style="margin:0 2px"><option value="1">MD1</option><option value="2">MD2</option><option value="3">MD3</option><option value="R32">R32</option><option value="R16">R16</option><option value="QF">QF</option><option value="SF">SF</option><option value="F">Final</option></select> <button id="md-next" style="padding:3px 6px">›</button> <span class="mono" id="md-autodetect" style="font-size:11px;margin-left:6px"></span></span>
-    <span class="dim mono" id="last-updated" style="font-size:11px">Snapshot</span> <span class="dim mono" id="override-badge" style="font-size:11px;display:none"></span> <button id="reset-btn" title="Reset squad">Reset</button>
+    <span class="dim mono" id="last-updated" style="font-size:11px">Snapshot</span> <span class="dim mono" id="override-badge" style="font-size:11px;display:none"></span> <button id="reset-btn" title="Reset to your saved team">Reset</button>
   </div>
 </header>
 
@@ -11032,7 +11032,17 @@ window.setMriOverride = setMriOverride;
 window.clearMriOverride = clearMriOverride;
 window.clearAllMriOverrides = clearAllMriOverrides;
 document.getElementById('reset-btn').onclick = ()=>{
-  if(confirm('Reset entire squad and pins?')){
+  // "Reset" reverts to YOUR saved team — not "empty the squad" (which then showed the optimizer's
+  // AI squad and read as "that's not my team"). Falls back to re-seeding the baked team, then to a
+  // hard clear only if there's genuinely no saved/baked team.
+  const saved = (typeof _readMyTeam === 'function') ? _readMyTeam() : null;
+  if(saved && Array.isArray(saved.squad) && saved.squad.filter(id=>PLAYER_BY_ID[id]).length >= 11){
+    if(confirm('Reset to your saved team? (discards this session’s tweaks)')){
+      resetToMyTeam();
+    }
+  } else if(typeof loadDefaultMyTeam === 'function' && DEFAULT_MY_TEAM && confirm('Load your saved team?')){
+    if(loadDefaultMyTeam()){ if(typeof autoSaveCurrent==='function') autoSaveCurrent(); refresh(); renderAll(); }
+  } else if(confirm('No saved team found — clear the squad and pins to start fresh?')){
     STATE.squad=[]; STATE.pins.clear(); STATE.excludes.clear(); refresh();
   }
 };
