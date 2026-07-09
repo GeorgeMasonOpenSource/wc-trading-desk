@@ -10701,6 +10701,14 @@ const DEFAULT_MY_TEAM = {
   chipsUsed: ['Maximum Captain','12th Man','Wildcard','Qualification Booster'],
   bank: 0.4, free: 4,
   prevCaptains: ['Facundo Medina','Vinícius Júnior'],   // earlier bakes' captains — detect "never customised"
+  // Squads of PRIOR bakes (name lists). A device whose saved team matches one of these is carrying an
+  // UNMODIFIED older bake, not a hand-built team, so migrateDefaultTeam moves it forward even if it was
+  // auto-"saved". v1–v3 all shared this 15 (only the armband changed); v4 is the first squad change.
+  prevSquads: [
+    ['Matt Freese','Raúl Rangel','Facundo Medina','Marc Cucurella','Ezri Konsa','Rúben Dias',
+     'Lisandro Martínez','Jude Bellingham','Florian Wirtz','Ousmane Dembélé','Vinícius Júnior',
+     'Granit Xhaka','Kylian Mbappé','Harry Kane','Lionel Messi'],
+  ],
 };
 function loadDefaultMyTeam(){
   if(typeof resolvePlayerName !== 'function') return false;
@@ -10744,7 +10752,14 @@ function migrateDefaultTeam(){
   const wantIds = DEFAULT_MY_TEAM.names.map(nm=>{ const r = resolvePlayerName(nm); return (r && !r.ambiguous && r.p) ? r.p.id : null; });
   if(wantIds.some(id=>id==null)) return false;            // resolution failed — do nothing
   const sameSquad = ids => Array.isArray(ids) && ids.length === wantIds.length && wantIds.every(id=>ids.includes(id));
-  if(base && base.userSaved && stampedV > 0 && !sameSquad(base.squad)) return false;   // their own team — respect it
+  // Does `ids` match the CURRENT bake or any PRIOR bake? If so it's an unmodified bake (migrate it),
+  // not a hand-built team. Only a squad matching NO bake is treated as genuinely the user's.
+  const resolveNames = names => { const r = names.map(nm=>{ const x=resolvePlayerName(nm); return (x&&!x.ambiguous&&x.p)?x.p.id:null; }); return r.some(i=>i==null)?null:r; };
+  const matchesAnyBake = ids => {
+    if(sameSquad(ids)) return true;
+    return (DEFAULT_MY_TEAM.prevSquads||[]).some(names=>{ const w=resolveNames(names); return w && Array.isArray(ids) && w.length===ids.length && w.every(id=>ids.includes(id)); });
+  };
+  if(base && base.userSaved && stampedV > 0 && !matchesAnyBake(base.squad)) return false;   // genuinely their own team — respect it
   // Keep a user-moved armband when the squad already matches the bake (unsaved working tweak).
   const prevCapIds = (DEFAULT_MY_TEAM.prevCaptains||[]).map(nm=>{ const r = resolvePlayerName(nm); return r && r.p ? r.p.id : null; });
   const keepCap = sameSquad(STATE.squad) && STATE.captainId && wantIds.includes(STATE.captainId)
