@@ -11171,7 +11171,14 @@ function inferMRI(p, squadPlayers){
     if(vals.length >= 2){
       const startRate = vals.filter(v=>v>=2).length / vals.length;   // ≥2 pts ≈ started 60+
       const featRate  = vals.filter(v=>v>=1).length / vals.length;   // ≥1 pt  ≈ featured at all
-      const obs = startRate>=0.66 ? 0.90 : startRate>=0.34 ? 0.62 : featRate>=0.5 ? 0.45 : 0.18;
+      const cameos    = vals.filter(v=>v===1).length;                // exactly 1 pt = appeared <60, no return
+      let obs = startRate>=0.66 ? 0.90 : startRate>=0.34 ? 0.62 : featRate>=0.5 ? 0.45 : 0.18;
+      // SCORING-SUB GUARD: a sub who scores clears the ≥2 "start" bar via his goal/assist despite
+      // playing <60, so points alone over-rate super-subs (Lautaro Martínez: cameos + returns read
+      // as an 83% starter). A cameo game (exactly 1 pt) is evidence a nailed 60+ starter never
+      // produces — its floor is 2. When the community also isn't buying him (low ownership), rate
+      // him as rotation, not a starter. Nailed stars with one quiet game are protected by ownership.
+      if(cameos > 0 && own < 8) obs = Math.min(obs, 0.50);
       const w = Math.min(0.85, 0.45 + 0.13*vals.length);             // trust real data more with more games
       base = w*obs + (1-w)*base;
     }
