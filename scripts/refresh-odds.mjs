@@ -552,20 +552,27 @@ async function probeLineage(){
 // real minutes proxy (≥2 = started 60+, ≥1 = featured, absent/0 = DNP). Confirms whether the live
 // site sees a player as benched — i.e. whether the "Saka pinned to 0.92" stale override is wrong.
 async function probeMinutes(){
-  const WANT = ['saka','messi','kane','bellingham','mbappe','wirtz','de bruyne'];
+  const WANT = ['saka','messi','kane','bellingham','mbappe','lautaro','julian alvarez','alvarez','tchouameni','olise','dembele'];
   const norm = s => (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[-'’.]/g,'').toLowerCase().trim();
   let players;
   try { players = await getJSON('https://play.fifa.com/json/fantasy/players.json'); }
   catch(e){ console.log('[probe-minutes] FIFA feed fetch failed:', e.message); return; }
   const arr = Array.isArray(players) ? players : (players.players || players.data || []);
   console.log('[probe-minutes] feed players:', arr.length);
+  // Dump the FULL stats object of one marquee player once, to see whether the feed exposes minutes
+  // per round (which would let us tell a scoring SUB apart from a starter — the roundPoints heuristic can't).
+  const sample = arr.find(p => norm(p.knownName||`${p.firstName} ${p.lastName}`).includes('messi'));
+  if(sample) console.log('[probe-minutes] FULL stats keys for Messi:', JSON.stringify(sample.stats));
   for(const p of arr){
     const name = p.knownName || `${p.firstName||''} ${p.lastName||''}`.trim();
     const n = norm(name);
     if(!WANT.some(w => n.includes(w))) continue;
     const rp = p.stats?.roundPoints;
     const vals = rp && typeof rp==='object' ? Object.entries(rp).map(([k,v])=>`${k}:${v}`) : [];
-    console.log(`[probe-minutes] ${name} (${p.position} £${p.price} own=${p.percentSelected}% status=${p.status||'-'}) roundPoints={${vals.join(', ')}} avg=${p.stats?.avgPoints ?? '-'}`);
+    // surface any minutes-like field if present
+    const minsField = ['minutes','minutesPlayed','mins','roundMinutes','appearances'].find(k=>p.stats && p.stats[k]!=null);
+    const mins = minsField ? `${minsField}=${JSON.stringify(p.stats[minsField])}` : 'no-minutes-field';
+    console.log(`[probe-minutes] ${name} (${p.position} £${p.price} own=${p.percentSelected}% status=${p.status||'-'}) roundPoints={${vals.join(', ')}} avg=${p.stats?.avgPoints ?? '-'} | ${mins}`);
   }
 }
 
