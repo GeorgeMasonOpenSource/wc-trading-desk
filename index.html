@@ -3121,15 +3121,17 @@ function getOppFor(playerTeam, md){
   }
   // knockouts: an ELIMINATED team has no fixture, full stop — returning null here zeroes every
   // downstream surface (projections, optimizer, transfers, captaincy, fixture pills) at the source.
-  if(isEliminated(playerTeam)) return null;
-  // Otherwise: real bracket matchup if the round has resolved (from KNOCKOUTS), else the PROJECTED
-  // opponent from the bracket tree (favourites advance), else a coarse average-opponent profile.
-  // Venues are neutral, so no home edge except for host nations.
-  const ko = KNOCKOUTS[playerTeam] && KNOCKOUTS[playerTeam][md];
-  if(ko && TEAMS[ko.opp]){
+  // A team that lost its semi is out of the FINAL but still plays the 3rd-PLACE PLAYOFF — a real,
+  // scored round-F fixture (KNOCKOUTS[team].F). Return it (flagged thirdPlace) BEFORE the elimination
+  // short-circuit, so those players aren't wrongly zeroed. projectXPts applies the rotation haircut.
+  const koReal = KNOCKOUTS[playerTeam] && KNOCKOUTS[playerTeam][md];
+  if(koReal && TEAMS[koReal.opp]){
     const home = (TEAMS[playerTeam] && TEAMS[playerTeam].host) ? 0.15 : 0;
-    return {opp:ko.opp, home, def:TEAMS[ko.opp].def, att:TEAMS[ko.opp].att};
+    const thirdPlace = (typeof isEliminated === 'function') && isEliminated(playerTeam);   // lost semi, playing 3rd place
+    return {opp:koReal.opp, home, def:TEAMS[koReal.opp].def, att:TEAMS[koReal.opp].att, thirdPlace};
   }
+  if(isEliminated(playerTeam)) return null;   // eliminated AND no scheduled game left → out
+  // Otherwise: PROJECTED opponent from the bracket tree (favourites advance), else average profile.
   const pj = projectedOpponent(playerTeam, md);
   if(pj && TEAMS[pj.opp]){
     const home = (TEAMS[playerTeam] && TEAMS[playerTeam].host) ? 0.15 : 0;
@@ -3167,6 +3169,13 @@ function isEliminated(team){
     if(!KNOCKOUTS[team][nxt] && KNOCKOUTS[tie.opp] && KNOCKOUTS[tie.opp][nxt]) return true;
   }
   return false;
+}
+
+// A beaten semifinalist that still has a round-F fixture is playing the 3rd-place playoff: out of the
+// final, but with one more scored (rotation-heavy) game. Used to badge them "3RD" not "OUT".
+function playsThirdPlace(team){
+  return typeof isEliminated === 'function' && isEliminated(team)
+    && typeof KNOCKOUTS !== 'undefined' && KNOCKOUTS[team] && !!KNOCKOUTS[team].F;
 }
 
 // ---------- PROJECTED FORWARD BRACKET ----------
@@ -3390,11 +3399,18 @@ function formFactor(p){
   return Math.max(0.55, Math.min(1.55, f));
 }
 
+// THIRD-PLACE PLAYOFF — the two beaten semifinalists play one more scored game (round F), but it's
+// a notorious rotation game: managers rest key starters. THIRD_PLACE_SCORED=false zeroes it entirely
+// if a given fantasy game doesn't award points for it (flip if the official rules say so). When it
+// IS scored, THIRD_PLACE_ROTATION discounts every projection to reflect the rest/rotation risk.
+const THIRD_PLACE_SCORED = true;
+const THIRD_PLACE_ROTATION = 0.60;
 function projectXPts(p, md, raw){
   if(p.pos==='GK') return projectGK(p, md, raw);
   const t = TEAMS[p.team];
   const fx = getOppFor(p.team, md);
   if(!fx) return null;
+  if(fx.thirdPlace && !THIRD_PLACE_SCORED) return null;   // game not scored in this fantasy variant
 
   // adjusted minutes (use mri × 90 as effective); per-MD override (e.g. injury ramp-up)
   // takes precedence when a news override supplies one.
@@ -3524,7 +3540,7 @@ function projectXPts(p, md, raw){
   xpts *= 0.87;
   // CALIBRATION (position-level, learned) × FORM (per-player realized output). Both skipped when
   // raw=true so the calibration fit trains on the unadjusted model, not its own output.
-  const cf = raw ? 1 : (calFactor(p.pos) * formFactor(p));
+  const cf = (raw ? 1 : (calFactor(p.pos) * formFactor(p))) * (fx.thirdPlace ? THIRD_PLACE_ROTATION : 1);
   xpts *= cf;
   // Every term in the total is deflated ×0.87 (it's applied to the sum above), so the displayed
   // breakdown must deflate uniformly too — concede/scout/cards were shown undeflated, making the
@@ -3543,6 +3559,7 @@ function projectGK(p, md, raw){
   const t = TEAMS[p.team];
   const fx = getOppFor(p.team, md);
   if(!fx) return null;
+  if(fx.thirdPlace && !THIRD_PLACE_SCORED) return null;
   const adjMin90 = (p.mriByMd && p.mriByMd[String(md)] != null) ? p.mriByMd[String(md)] : p.mri;
   const baseXG = 1.30;
   let teamXGA_gk, teamCsProb_gk, xgSource = 'elo';
@@ -3584,7 +3601,7 @@ function projectGK(p, md, raw){
   let xpts = appearance + csPts + concedePen + savePts + gkGoalPts + penSavePts + bonusExp + cardPen + scoutEV;
   // Same variance deflator as outfield
   xpts *= 0.87;
-  const cf = raw ? 1 : (calFactor(p.pos) * formFactor(p));
+  const cf = (raw ? 1 : (calFactor(p.pos) * formFactor(p))) * (fx.thirdPlace ? THIRD_PLACE_ROTATION : 1);
   xpts *= cf;
   const components = {appearance:appearance*0.87, goals:gkGoalPts*0.87, assists:0, cs:csPts*0.87, concede:concedePen, bonus:bonusExp*0.87, scout:scoutEV*0.87, cards:cardPen, saves:savePts*0.87, penSave:penSavePts*0.87};
   for(const k in components) components[k] = round1(components[k] * cf);
@@ -5618,11 +5635,12 @@ function renderPitch(){
     const srcDots = score === 3 ? '●●●' : score === 2 ? '●●' : score === 1 ? '●' : '○';
     const srcLabel = `Data confidence: team-xG ${dim1?'✓ bookie':'✗ Elo'} · MRI ${dim2?'✓ observed':'✗ heuristic'} · player stats ${dim3?'✓ curated':'✗ proxy'}`;
     const srcColor = score === 3 ? 'var(--good)' : score === 2 ? 'var(--ink2)' : 'var(--warn)';
-    const out = isEliminated(p.team);
-    return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer${out?';opacity:0.55':''}" title="${out?TEAMS[p.team].name+' are OUT of the tournament — transfer '+shortName(p.name)+' out':'Tap to swap '+shortName(p.name)}">
+    const third = playsThirdPlace(p.team);          // lost semi but plays the 3rd-place game (rotation risk)
+    const out = isEliminated(p.team) && !third;      // truly done, no game left
+    return `<div class="pitch-card v2 ${cls}" data-pid="${p.id}" style="cursor:pointer${(out||third)?';opacity:0.6':''}" title="${out?TEAMS[p.team].name+' are OUT — transfer '+shortName(p.name)+' out':third?TEAMS[p.team].name+' play the 3rd-place playoff — scored but heavy rotation risk':'Tap to swap '+shortName(p.name)}">
       <button class="card-x" title="Remove ${shortName(p.name)} → pick a replacement" onclick="event.stopPropagation();toggleSquad(${p.id})">✕</button>
       <span class="card-swap" title="Swap">⇄</span>
-      ${out?'<span style="position:absolute;top:4px;left:4px;background:var(--bad);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;z-index:2">OUT</span>':''}
+      ${out?'<span style="position:absolute;top:4px;left:4px;background:var(--bad);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;z-index:2">OUT</span>':third?'<span style="position:absolute;top:4px;left:4px;background:var(--warn);color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;z-index:2" title="3rd-place playoff — rotation risk">3RD</span>':''}
       <div class="shirt" style="pointer-events:none">${shirtSvg(p.team, isCap, isVC)}</div>
       <div class="n pos-${p.pos}" style="pointer-events:none">${shortName(p.name)}</div>
       <div class="c" style="pointer-events:none"><span class="badge-group" style="background:${c.primary};color:${c.alt};border-color:${c.primary}">${p.team}</span> <span class="dim mono" style="font-size:10px">$${p.price.toFixed(1)}</span> <span title="${srcLabel}" style="color:${srcColor};font-size:9px;letter-spacing:-1px">${srcDots}</span></div>
@@ -5720,9 +5738,11 @@ function renderTeamPool(){
   el.innerHTML = rows.map(p=>{
     const owned = STATE.squad.includes(p.id);
     const oppTxt = p.opp ? `vs ${p.opp}` : MD_LABEL(md);
-    const out = isEliminated(p.team);
-    return `<div class="pool-row ${owned?'owned':''}" onclick="openPlayer(${p.id})"${out?' style="opacity:0.55"':''}>
-      <div class="pr-main"><div class="pr-name">${p.name}${out?' <span style="background:var(--bad);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle">OUT</span>':''}</div><div class="pr-sub"><span class="pos-${p.pos}">${p.pos}</span> · ${p.team} ${oppTxt} · $${p.price.toFixed(1)}m · ${(p.own*100).toFixed(0)}% sel</div></div>
+    const third = playsThirdPlace(p.team);
+    const out = isEliminated(p.team) && !third;
+    const tag = out?' <span style="background:var(--bad);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle">OUT</span>':third?' <span style="background:var(--warn);color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle" title="3rd-place playoff — rotation risk">3RD</span>':'';
+    return `<div class="pool-row ${owned?'owned':''}" onclick="openPlayer(${p.id})"${(out||third)?' style="opacity:0.6"':''}>
+      <div class="pr-main"><div class="pr-name">${p.name}${tag}</div><div class="pr-sub"><span class="pos-${p.pos}">${p.pos}</span> · ${p.team} ${oppTxt} · $${p.price.toFixed(1)}m · ${(p.own*100).toFixed(0)}% sel</div></div>
       <div class="pr-pred good" title="Predicted points, ${MD_LABEL(md)}">${p.xptsMD.toFixed(1)}</div>
       ${owned ? '<span class="pr-add dim" title="In your team">✓</span>' : `<button class="pr-add" title="Add to team" onclick="event.stopPropagation();addToSquad(${p.id});refresh()">+</button>`}
     </div>`;
