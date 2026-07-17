@@ -552,7 +552,18 @@ async function probeLineage(){
 // real minutes proxy (≥2 = started 60+, ≥1 = featured, absent/0 = DNP). Confirms whether the live
 // site sees a player as benched — i.e. whether the "Saka pinned to 0.92" stale override is wrong.
 async function probeMinutes(){
-  const WANT = ['saka','messi','kane','bellingham','mbappe','lautaro','julian alvarez','alvarez','tchouameni','olise','dembele'];
+  // Final-round decision: dump the ESP + ARG (finalist) pool + the questioned holdings so we rate
+  // minutes off real roundPoints, not stale offline mri. ESP + ARG marquee names + defenders.
+  const WANT = [
+    // ESP
+    'nico williams','williams','pedri','yamal','oyarzabal','olmo','merino','baena','cucurella','cubarsi',
+    'le normand','laporte','carvajal','unai simon','simon','raya','ferran',
+    // ARG
+    'messi','mac allister','lautaro','julian alvarez','alvarez','de paul','enzo','molina','romero','otamendi',
+    'tagliafico','lisandro martinez','medina','emiliano martinez','nico paz','almada',
+    // questioned 3rd-place / holdings
+    'konsa','kane','bellingham','mbappe','dembele','olise','digne','maignan'
+  ];
   const norm = s => (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[-'’.]/g,'').toLowerCase().trim();
   let players;
   try { players = await getJSON('https://play.fifa.com/json/fantasy/players.json'); }
