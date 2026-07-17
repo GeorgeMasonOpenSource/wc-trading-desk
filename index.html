@@ -11147,6 +11147,9 @@ const ELO_RATINGS = {
   POR:[2003,87,82],UZB:[1626,71,72],COL:[1869,82,80,false,true],COD:[1635,72,71],
   ENG:[1971,86,84],CRO:[1869,80,80],GHA:[1633,73,71],PAN:[1639,72,72],
 };
+// Deepest round anyone in the feed has a roundPoints entry for = the latest completed round. Set by
+// rebuildFromAPI; lets inferMRI tell "hasn't played recently (dropped out)" from "played every game".
+let _GLOBAL_MAX_ROUND = 0;
 function inferMRI(p, squadPlayers){
   const pos=p.position, own=p.percentSelected, price=p.price;
   const samePos=squadPlayers.filter(x=>x.position===pos);
@@ -11202,6 +11205,17 @@ function inferMRI(p, squadPlayers){
       // produces — its floor is 2. When the community also isn't buying him (low ownership), rate
       // him as rotation, not a starter. Nailed stars with one quiet game are protected by ownership.
       if(cameos > 0 && own < 8) obs = Math.min(obs, 0.50);
+      // RECENCY / DROP-OUT GUARD: roundPoints OMITS rounds the player didn't feature in, so a player
+      // who's been benched recently still shows a high start-rate over the games he DID play (Medina:
+      // {1:9,2:11,4:2,5:1} — started early, then no round 6/7 = out of the XI for the QF & SF). If he's
+      // missed the most recent round(s) relative to the deepest round anyone has played, he's dropped
+      // out: heavily downrate. Guarded by _GLOBAL_MAX_ROUND (0 pre-tournament → no effect).
+      if(_GLOBAL_MAX_ROUND > 0){
+        const lastPlayed = Math.max(...Object.keys(rp).map(Number).filter(n=>!isNaN(n)));
+        const missedRecent = _GLOBAL_MAX_ROUND - lastPlayed;
+        if(missedRecent >= 2) obs = Math.min(obs, 0.18);       // hasn't featured in 2+ latest rounds → out of the team
+        else if(missedRecent === 1) obs = Math.min(obs, 0.55); // missed the most recent game → benched/rested
+      }
       const w = Math.min(0.85, 0.45 + 0.13*vals.length);             // trust real data more with more games
       base = w*obs + (1-w)*base;
     }
@@ -11238,6 +11252,10 @@ function rebuildFromAPI(apiPlayers, apiSquads){
   apiPlayers.forEach(p=>{ if(!bySquad[p.squadId]) bySquad[p.squadId]=[]; bySquad[p.squadId].push(p); });
   const posMax={};
   apiPlayers.forEach(p=>{ posMax[p.position] = Math.max(posMax[p.position]||0, p.price); });
+  // Latest completed round across the whole feed — so inferMRI can detect players who've dropped
+  // out of their team's XI (no roundPoints entry for the most recent round(s)).
+  _GLOBAL_MAX_ROUND = 0;
+  apiPlayers.forEach(p=>{ const rp=p.stats&&p.stats.roundPoints; if(rp) Object.keys(rp).forEach(k=>{ const n=+k; if(n>_GLOBAL_MAX_ROUND) _GLOBAL_MAX_ROUND=n; }); });
   const newPlayers = apiPlayers.map(p=>{
     const name = p.knownName || (p.firstName + ' ' + p.lastName);
     const mri = inferMRI(p, bySquad[p.squadId]);
