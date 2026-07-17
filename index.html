@@ -10710,16 +10710,16 @@ window.importSquadFromText = importSquadFromText;
 const DEFAULT_MY_TEAM = {
   // version bumps when the owner updates his official-game state (squad/armband) — existing devices
   // still carrying an UNMODIFIED older default migrate forward on load (see migrateDefaultTeam).
-  version: 5,   // SF (2026-07-13 screenshot): dead 4 cleared for Maignan/Nyland/Tchouaméni/Bellingham;
-                // armband on Mbappé. Alive 14 all on semifinalists (5 FRA, 4 ARG, 3 ENG, 2 ESP).
-  names: ['Mike Maignan','Ørjan Nyland','Pau Cubarsí','Marc Cucurella','Ezri Konsa','Facundo Medina',
-          'Lisandro Martínez','Alexis Mac Allister','Michael Olise','Ousmane Dembélé','Aurélien Tchouaméni',
+  version: 6,   // Final round (2026-07-16 screenshot): Konsa→Digne, Tchouaméni→Baena; armband Mbappé.
+                // Split: 7 finalists (ESP3+ARG4), 7 in the 3rd-place game (FRA5+ENG2), Nyland out.
+  names: ['Mike Maignan','Ørjan Nyland','Pau Cubarsí','Marc Cucurella','Lucas Digne','Facundo Medina',
+          'Lisandro Martínez','Alexis Mac Allister','Michael Olise','Ousmane Dembélé','Álex Baena',
           'Jude Bellingham','Kylian Mbappé','Harry Kane','Lionel Messi'],
   captain: 'Kylian Mbappé', vice: 'Michael Olise',
   // Confirmed spent (official app): Max Captain RD1, 12th Man RD2, Wildcard RD3, Qualification R16.
   // Only Mystery Booster (clean-sheet) remains — unless played at the QF (unconfirmed).
   chipsUsed: ['Maximum Captain','12th Man','Wildcard','Qualification Booster'],
-  bank: 0.4, free: 5,
+  bank: 0.7, free: 6,
   prevCaptains: ['Facundo Medina','Vinícius Júnior'],   // earlier bakes' captains — detect "never customised"
   // Squads of PRIOR bakes (name lists). A device whose saved team matches one of these is carrying an
   // UNMODIFIED older bake, not a hand-built team, so migrateDefaultTeam moves it forward even if it was
@@ -10731,6 +10731,9 @@ const DEFAULT_MY_TEAM = {
     ['Matt Freese','Raúl Rangel','Pau Cubarsí','Marc Cucurella','Ezri Konsa','Facundo Medina',
      'Lisandro Martínez','Alexis Mac Allister','Michael Olise','Ousmane Dembélé','Vinícius Júnior',
      'Casemiro','Kylian Mbappé','Harry Kane','Lionel Messi'],       // v4
+    ['Mike Maignan','Ørjan Nyland','Pau Cubarsí','Marc Cucurella','Ezri Konsa','Facundo Medina',
+     'Lisandro Martínez','Alexis Mac Allister','Michael Olise','Ousmane Dembélé','Aurélien Tchouaméni',
+     'Jude Bellingham','Kylian Mbappé','Harry Kane','Lionel Messi'],  // v5
   ],
 };
 function loadDefaultMyTeam(){
