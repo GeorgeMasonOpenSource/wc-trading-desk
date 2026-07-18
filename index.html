@@ -4456,6 +4456,9 @@ function _findBestSingleTransfer(squadIds, mdsRemaining, bank, capPerCountry){
   let best = null;
   for(const outId of squadIds){
     const out = PLAYER_BY_ID[outId];
+    // Clearing a dead/eliminated/dropped-out body for a live one is worth a small ranking nudge, so at
+    // an XI-neutral tie the engine prefers replacing dead weight over churning two playing squad mates.
+    const outDeadBonus = ((typeof isEliminated==='function' && isEliminated(out.team)) || (projectXPts(out, mdNow)?.xpts || 0) < 1.5) ? 0.10 : 0;
     const ccMinusOut = {...cc}; ccMinusOut[out.team]--; if(ccMinusOut[out.team]===0) delete ccMinusOut[out.team];
     const newBank = bank + out.price;
     const outResid = residOf(out);
@@ -4468,9 +4471,10 @@ function _findBestSingleTransfer(squadIds, mdsRemaining, bank, capPerCountry){
       const sq = squadIds.map(x => x===outId ? c.id : x);
       const xiGain = mdsRemaining.reduce((a,m)=>a + _gwScore(sq, m), 0) - baseXi;
       const resid = RESID_W * (residOf(c) - outResid);
-      const score = xiGain + resid;
-      if(!best || score > best.delta){
-        best = {outId, inId:c.id, delta:score, xiGain, resid, netCost: c.price - out.price, newBank: newBank - c.price};
+      const score = xiGain + resid;                        // TRUE points gain (reported)
+      const rank = score + outDeadBonus;                   // selection preference (dead-clear tiebreak)
+      if(!best || rank > best.rank){
+        best = {outId, inId:c.id, delta:score, rank, xiGain, resid, netCost: c.price - out.price, newBank: newBank - c.price};
       }
     }
   }
@@ -4492,11 +4496,24 @@ function recommendFreeTransfers(squadIds, md){
   const cap = CAP_ALLOC[md] || 3;
   let squad = squadIds.slice();
   let bank = STATE.budget - sq0.reduce((a,p)=>a+p.price,0);
+  // Free transfers are use-it-or-lose-it: they don't accumulate, so on the FINAL round (no future
+  // round to save one for) every non-negative move is free value — most of all clearing a dead /
+  // eliminated / dropped-out player (a body that scores 0 and can't even cover the bench) for a live
+  // starter. The old flat "+0.5 or stop" bar hid those cleanups, so it only ever suggested ~4 of 6.
+  const lastRound = md === 'F' || (typeof _remainingHorizon === 'function' && _remainingHorizon() <= 1);
   const moves = [];
   for(let i=0; i<alloc; i++){
     const m = _findBestSingleTransfer(squad, [md], bank, cap);
-    if(!m || m.delta <= 0.5) break;                 // no worthwhile free move left → stop (don't waste it)
-    moves.push({ outId:m.outId, inId:m.inId, out:PLAYER_BY_ID[m.outId], in:PLAYER_BY_ID[m.inId], delta:m.delta, xiGain:m.xiGain, resid:m.resid, netCost:m.netCost });
+    if(!m) break;
+    const outP = PLAYER_BY_ID[m.outId];
+    const outDead = outP && ((typeof isEliminated==='function' && isEliminated(outP.team)) || (projectXPts(outP, md)?.xpts || 0) < 1.5);
+    // Take a move only if it genuinely helps: a real upgrade (≥0.5, relaxed to ≥0.2 on the last round
+    // to capture small gains you can't save the transfer for), OR clearing a dead/eliminated/dropped
+    // body for a live one (any non-negative delta — free bench cover). Never a lateral live→live churn
+    // (delta≈0 between two playing squad members) and never a move that hurts the team.
+    const worthIt = m.delta >= (lastRound ? 0.2 : 0.5) || (outDead && m.delta >= 0);
+    if(!worthIt) break;
+    moves.push({ outId:m.outId, inId:m.inId, out:PLAYER_BY_ID[m.outId], in:PLAYER_BY_ID[m.inId], delta:m.delta, xiGain:m.xiGain, resid:m.resid, netCost:m.netCost, cleanup: m.delta < 0.5 });
     squad = _applyTransfer(squad, m);
     bank = m.newBank;
   }
@@ -5030,7 +5047,7 @@ function _transferRecHtml(md){
   }
   const alloc = rec?.alloc ?? FT_ALLOC[md];
   if(rec && rec.moves.length){
-    const list = rec.moves.map((m,i)=>`<div style="margin-top:${i?4:6}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">+${m.delta.toFixed(1)} xPts${m.xiGain!=null?` (this GW ${m.xiGain>=0?'+':''}${m.xiGain.toFixed(1)} · run-in ${m.resid>=0?'+':''}${m.resid.toFixed(1)})`:''} · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
+    const list = rec.moves.map((m,i)=>`<div style="margin-top:${i?4:6}px">${i+1}. <b>${m.out?.name}</b> → <b class="good">${m.in?.name}</b> <span class="dim mono" style="font-size:11px">${m.cleanup?`<span class="warn">clears dead weight</span> · ${m.in?.team} starter`:`+${m.delta.toFixed(1)} xPts${m.xiGain!=null?` (this GW ${m.xiGain>=0?'+':''}${m.xiGain.toFixed(1)} · run-in ${m.resid>=0?'+':''}${m.resid.toFixed(1)})`:''}`} · net ${m.netCost>=0?'+':''}$${m.netCost.toFixed(1)}m</span></div>`).join('');
     const spec = rec.moves.map(m=>`${m.outId}:${m.inId}`).join(',');
     return `<div class="rec"><div><div class="title">Transfers — use ${rec.moves.length} of ${alloc} free (no hit)</div><div class="sub">Best moves within your free allowance for ${MD_LABEL(md)} — total <b class="good">+${rec.totalDelta.toFixed(1)} xPts</b>, zero points hit:${list}<div style="margin-top:8px"><button class="primary" onclick="applyMoves('${spec}')">✓ Apply ${rec.moves.length>1?'all '+rec.moves.length:''} transfer${rec.moves.length>1?'s':''}</button></div></div></div><div class="ev good">+${rec.totalDelta.toFixed(1)}</div></div>`;
   }
